@@ -36,8 +36,7 @@ const DEFAULTS = {
   averageLeadTime: 2,
 } as const;
 
-const SEASONALITY = [
-  0.0166666666666667,
+const SEASONALITY_MONTHS_AFTER_FIRST = [
   0.0333333333333333,
   0.0633333333333333,
   0.0833333333333333,
@@ -51,6 +50,15 @@ const SEASONALITY = [
   0.1333333333333333,
 ] as const;
 
+const FIRST_SEASONALITY =
+  1 -
+  SEASONALITY_MONTHS_AFTER_FIRST.reduce(
+    (sum, monthSeasonality) => sum + monthSeasonality,
+    0,
+  );
+
+const SEASONALITY = [FIRST_SEASONALITY, ...SEASONALITY_MONTHS_AFTER_FIRST] as const;
+
 function roundExcelInteger(value: number): number {
   if (value >= 0) {
     return Math.floor(value + 0.5);
@@ -60,7 +68,7 @@ function roundExcelInteger(value: number): number {
 }
 
 function getMonthStart(date: Date): Date {
-  return new Date(Date.UTC(date.getFullYear(), date.getMonth(), 1));
+  return new Date(date.getFullYear(), date.getMonth(), 1);
 }
 
 export function calculateInventoryData(
@@ -85,9 +93,7 @@ export function calculateInventoryData(
   const months: InventoryMonthlyRecord[] = [];
 
   for (let monthIndex = 0; monthIndex < SEASONALITY.length; monthIndex += 1) {
-    const month = new Date(
-      Date.UTC(firstMonth.getUTCFullYear(), firstMonth.getUTCMonth() + monthIndex, 1),
-    );
+    const month = new Date(firstMonth.getFullYear(), firstMonth.getMonth() + monthIndex, 1);
     const fulfillment = roundExcelInteger(annualDemand * SEASONALITY[monthIndex]);
     const beginningInventory =
       monthIndex === 0 ? startingInventory : months[monthIndex - 1].endingInventory;
