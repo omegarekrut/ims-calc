@@ -2,7 +2,8 @@
   "name": "ims-calc",
   "private": true,
   "scripts": {
-    "build": "esbuild src/inventoryGraph.ts --bundle --format=iife --minify --outfile=dist/inventory-graph.min.js"
+    "build": "esbuild src/inventoryGraph.ts --bundle --format=iife --minify --outfile=dist/inventory-graph.min.js",
+    "verify": "node scripts/verify-inventory-graph.mjs"
   },
   "devDependencies": {
     "esbuild": "^0.28.1"
