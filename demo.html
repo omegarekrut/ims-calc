@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Inventory Graph Demo</title>
+    <style>
+      :root {
+        font-family: sans-serif;
+        color: #111827;
+        background: #f3f4f6;
+      }
+
+      body {
+        margin: 0;
+        padding: 24px;
+      }
+
+      .demo-shell {
+        max-width: 960px;
+        margin: 0 auto;
+      }
+
+      .graph-frame {
+        width: min(100%, 900px);
+        margin: 0 auto;
+        background: #ffffff;
+        border: 1px solid #d1d5db;
+        border-radius: 12px;
+        padding: 16px;
+        box-sizing: border-box;
+      }
+
+      #inventory-graph {
+        min-height: 360px;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="demo-shell">
+      <h1>Inventory Graph Demo</h1>
+      <div class="graph-frame">
+        <div id="inventory-graph"></div>
+      </div>
+    </main>
+
+    <script src="./dist/inventory-graph.min.js"></script>
+    <script>
+      InventoryGraph.mount("#inventory-graph", {
+        startingInventory: 2000,
+        annualDemand: 7000,
+        costPerOrder: 500,
+        holdingCostPerUnit: 2.5,
+        maxMonthlySales: 450,
+        maxLeadTime: 4,
+        averageMonthlySales: 250,
+        averageLeadTime: 2
+      });
+    </script>
+  </body>
+</html>
