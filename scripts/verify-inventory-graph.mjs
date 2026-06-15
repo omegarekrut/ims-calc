@@ -3,11 +3,12 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import vm from 'node:vm';
+import zlib from 'node:zlib';
 import { execFileSync } from 'node:child_process';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import * as esbuild from 'esbuild';
 
-const repoRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const workbookPath = path.join(repoRoot, 'Inventory Calculator.xlsx');
 const taskDir = path.join(
   repoRoot,
@@ -55,11 +56,76 @@ function writeArtifact(name, content) {
   fs.writeFileSync(path.join(rawDir, name), content);
 }
 
-function unzipEntry(entryPath) {
-  return execFileSync('unzip', ['-p', workbookPath, entryPath], {
-    cwd: repoRoot,
-    encoding: 'utf8',
-  });
+function readZipEntry(zipBuffer, entryPath) {
+  const eocdSignature = 0x06054b50;
+  const centralDirectorySignature = 0x02014b50;
+  const localFileHeaderSignature = 0x04034b50;
+  const eocdMinimumOffset = Math.max(0, zipBuffer.length - 0xffff - 22);
+
+  let eocdOffset = -1;
+
+  for (let offset = zipBuffer.length - 22; offset >= eocdMinimumOffset; offset -= 1) {
+    if (zipBuffer.readUInt32LE(offset) === eocdSignature) {
+      eocdOffset = offset;
+      break;
+    }
+  }
+
+  if (eocdOffset === -1) {
+    throw new Error('Could not locate ZIP end of central directory.');
+  }
+
+  const centralDirectoryOffset = zipBuffer.readUInt32LE(eocdOffset + 16);
+  const totalEntries = zipBuffer.readUInt16LE(eocdOffset + 10);
+  let directoryOffset = centralDirectoryOffset;
+
+  for (let entryIndex = 0; entryIndex < totalEntries; entryIndex += 1) {
+    if (zipBuffer.readUInt32LE(directoryOffset) !== centralDirectorySignature) {
+      throw new Error('Invalid central directory entry in workbook ZIP.');
+    }
+
+    const compressionMethod = zipBuffer.readUInt16LE(directoryOffset + 10);
+    const compressedSize = zipBuffer.readUInt32LE(directoryOffset + 20);
+    const uncompressedSize = zipBuffer.readUInt32LE(directoryOffset + 24);
+    const fileNameLength = zipBuffer.readUInt16LE(directoryOffset + 28);
+    const extraFieldLength = zipBuffer.readUInt16LE(directoryOffset + 30);
+    const fileCommentLength = zipBuffer.readUInt16LE(directoryOffset + 32);
+    const localHeaderOffset = zipBuffer.readUInt32LE(directoryOffset + 42);
+    const fileName = zipBuffer
+      .subarray(directoryOffset + 46, directoryOffset + 46 + fileNameLength)
+      .toString('utf8');
+
+    if (fileName === entryPath) {
+      if (zipBuffer.readUInt32LE(localHeaderOffset) !== localFileHeaderSignature) {
+        throw new Error(`Invalid local file header for ZIP entry ${entryPath}.`);
+      }
+
+      const localFileNameLength = zipBuffer.readUInt16LE(localHeaderOffset + 26);
+      const localExtraFieldLength = zipBuffer.readUInt16LE(localHeaderOffset + 28);
+      const dataStart = localHeaderOffset + 30 + localFileNameLength + localExtraFieldLength;
+      const compressedData = zipBuffer.subarray(dataStart, dataStart + compressedSize);
+
+      if (compressionMethod === 0) {
+        return compressedData.toString('utf8');
+      }
+
+      if (compressionMethod === 8) {
+        const inflated = zlib.inflateRawSync(compressedData);
+
+        if (inflated.length !== uncompressedSize) {
+          throw new Error(`Unexpected inflated size for ZIP entry ${entryPath}.`);
+        }
+
+        return inflated.toString('utf8');
+      }
+
+      throw new Error(`Unsupported ZIP compression method ${compressionMethod} for ${entryPath}.`);
+    }
+
+    directoryOffset += 46 + fileNameLength + extraFieldLength + fileCommentLength;
+  }
+
+  throw new Error(`Could not find ZIP entry ${entryPath}.`);
 }
 
 function extractTagValues(xml, tagName) {
@@ -114,8 +180,9 @@ function runBuild() {
 }
 
 function verifyWorkbookProof() {
-  const chartXml = unzipEntry('xl/charts/chart1.xml');
-  const sheetXml = unzipEntry('xl/worksheets/sheet1.xml');
+  const workbookZip = fs.readFileSync(workbookPath);
+  const chartXml = readZipEntry(workbookZip, 'xl/charts/chart1.xml');
+  const sheetXml = readZipEntry(workbookZip, 'xl/worksheets/sheet1.xml');
 
   writeArtifact('workbook-chart1.xml', chartXml);
   writeArtifact('workbook-sheet1.xml', sheetXml);
@@ -287,7 +354,14 @@ function verifyBundleSmoke() {
   const bundlePath = path.join(repoRoot, 'dist/inventory-graph.min.js');
   assert.ok(fs.existsSync(bundlePath), 'Build output dist/inventory-graph.min.js was not generated.');
 
-  class HTMLElement {}
+  class HTMLElement {
+    constructor() {
+      this.style = {};
+      this.parentElement = null;
+      this.clientWidth = 0;
+      this.clientHeight = 0;
+    }
+  }
 
   class HTMLCanvasElement extends HTMLElement {
     constructor() {
@@ -297,7 +371,6 @@ function verifyBundleSmoke() {
       this.height = 0;
       this.clientWidth = 640;
       this.clientHeight = 360;
-      this.parentElement = null;
       this._context = createCanvasContextStub();
     }
 
@@ -306,7 +379,27 @@ function verifyBundleSmoke() {
     }
   }
 
-  const canvas = new HTMLCanvasElement();
+  class HTMLDivElement extends HTMLElement {
+    constructor() {
+      super();
+      this.clientWidth = 900;
+      this.clientHeight = 0;
+      this.children = [];
+    }
+
+    replaceChildren(...children) {
+      this.children.forEach((child) => {
+        child.parentElement = null;
+      });
+      this.children = children;
+      children.forEach((child) => {
+        child.parentElement = this;
+      });
+    }
+  }
+
+  const container = new HTMLDivElement();
+  const createdElements = [];
   const windowStub = {
     devicePixelRatio: 1,
     addEventListener() {},
@@ -315,6 +408,12 @@ function verifyBundleSmoke() {
   const documentStub = {
     querySelector(selector) {
       assert.equal(selector, '#inventory-graph', 'Smoke test queried an unexpected selector.');
+      return container;
+    },
+    createElement(tagName) {
+      assert.equal(tagName, 'canvas', 'Smoke test only expects canvas creation.');
+      const canvas = new HTMLCanvasElement();
+      createdElements.push(canvas);
       return canvas;
     },
   };
@@ -324,6 +423,7 @@ function verifyBundleSmoke() {
     document: documentStub,
     HTMLElement,
     HTMLCanvasElement,
+    HTMLDivElement,
     Intl,
     Date,
     Math,
@@ -340,12 +440,19 @@ function verifyBundleSmoke() {
     startDate: new Date(2026, 5, 1),
   });
 
-  assert.equal(handle.canvas, canvas, 'Mount did not return the queried canvas.');
+  assert.equal(createdElements.length, 1, 'Mount did not create a canvas for the demo container path.');
+  assert.equal(handle.canvas, createdElements[0], 'Mount did not return the created canvas.');
+  assert.equal(container.children.length, 1, 'Mount did not attach the created canvas to the container.');
+  assert.equal(container.children[0], handle.canvas, 'Mount attached an unexpected child to the container.');
+  assert.equal(handle.canvas.parentElement, container, 'Created canvas was not parented to the container.');
+  assert.equal(handle.canvas.style.width, '100%', 'Owned canvas did not receive responsive width styling.');
   assert.equal(typeof handle.redraw, 'function', 'Mount handle is missing redraw().');
   assert.equal(typeof handle.destroy, 'function', 'Mount handle is missing destroy().');
 
   handle.redraw();
   handle.destroy();
+
+  assert.equal(container.children.length, 0, 'Destroy did not clean up the owned canvas.');
 }
 
 async function main() {
