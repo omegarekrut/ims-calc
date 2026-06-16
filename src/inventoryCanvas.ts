@@ -6,9 +6,31 @@ export interface InventoryChartHandle {
   destroy: () => void;
 }
 
+interface ChartPoint {
+  index: number;
+  x: number;
+  y: number;
+  value: number;
+  month: Date;
+}
+
+interface ChartLayout {
+  cssWidth: number;
+  cssHeight: number;
+  ticks: number[];
+  plotLeft: number;
+  plotRight: number;
+  plotTop: number;
+  plotBottom: number;
+  getX: (index: number) => number;
+  getY: (value: number) => number;
+  points: ChartPoint[];
+}
+
 const DEFAULT_HEIGHT = 360;
 const DEFAULT_ASPECT_RATIO = 0.56;
 const GRIDLINE_COUNT = 5;
+const HOVER_HIT_RADIUS = 12;
 const LEGEND_ITEMS = [
   { label: 'End Inv', color: '#2563eb' },
   { label: 'Safety Stock', color: '#dc2626' },
@@ -16,6 +38,16 @@ const LEGEND_ITEMS = [
 
 function formatMonthLabel(date: Date): string {
   return new Intl.DateTimeFormat('en-US', { month: 'short' }).format(date);
+}
+
+function formatTooltipMonth(date: Date): string {
+  return new Intl.DateTimeFormat('en-US', { month: 'short', year: 'numeric' }).format(date);
+}
+
+function formatInventoryValue(value: number): string {
+  return new Intl.NumberFormat('en-US', {
+    maximumFractionDigits: 0,
+  }).format(Math.round(value));
 }
 
 function getTickStep(rawStep: number): number {
@@ -140,6 +172,183 @@ function drawLine(
   context.stroke();
 }
 
+function buildChartLayout(
+  canvas: HTMLCanvasElement,
+  data: InventoryCalculationResult,
+): ChartLayout {
+  const { width: cssWidth, height: cssHeight } = getContainerSize(canvas);
+  const domain = getYDomain(data);
+  const ticks = buildTicks(domain.min, domain.max);
+  const scaleDomain = {
+    min: ticks[0] ?? domain.min,
+    max: ticks[ticks.length - 1] ?? domain.max,
+  };
+  const longestTickLabel = ticks.reduce(
+    (longest, tick) => Math.max(longest, String(Math.round(tick)).length),
+    0,
+  );
+  const yLabelWidth = Math.max(longestTickLabel * 8 + 16, 48);
+  const margin = {
+    top: 24,
+    right: 24,
+    bottom: 52,
+    left: yLabelWidth,
+  };
+  const plotLeft = margin.left;
+  const plotTop = margin.top + 18;
+  const plotRight = cssWidth - margin.right;
+  const plotBottom = cssHeight - margin.bottom;
+  const plotWidth = Math.max(1, plotRight - plotLeft);
+  const plotHeight = Math.max(1, plotBottom - plotTop);
+  const xStep = data.months.length > 1 ? plotWidth / (data.months.length - 1) : 0;
+  const getX = (index: number) => plotLeft + xStep * index;
+  const getY = (value: number) =>
+    plotBottom -
+    ((value - scaleDomain.min) / (scaleDomain.max - scaleDomain.min || 1)) * plotHeight;
+  const points = data.months.map((month, index) => ({
+    index,
+    x: getX(index),
+    y: getY(month.endingInventory),
+    value: month.endingInventory,
+    month: month.month,
+  }));
+
+  return {
+    cssWidth,
+    cssHeight,
+    ticks,
+    plotLeft,
+    plotRight,
+    plotTop,
+    plotBottom,
+    getX,
+    getY,
+    points,
+  };
+}
+
+function drawHoverMarker(context: CanvasRenderingContext2D, point: ChartPoint): void {
+  context.beginPath();
+  context.fillStyle = '#ffffff';
+  context.arc(point.x, point.y, 5, 0, Math.PI * 2);
+  context.fill();
+  context.lineWidth = 2;
+  context.strokeStyle = LEGEND_ITEMS[0].color;
+  context.stroke();
+
+  context.beginPath();
+  context.fillStyle = LEGEND_ITEMS[0].color;
+  context.arc(point.x, point.y, 2.5, 0, Math.PI * 2);
+  context.fill();
+}
+
+function drawTooltip(
+  context: CanvasRenderingContext2D,
+  layout: ChartLayout,
+  point: ChartPoint,
+): void {
+  const lines = [`Month: ${formatTooltipMonth(point.month)}`, `End Inv: ${formatInventoryValue(point.value)}`];
+  const paddingX = 10;
+  const paddingY = 8;
+  const lineHeight = 18;
+  const tooltipWidth =
+    Math.max(...lines.map((line) => context.measureText(line).width)) + paddingX * 2;
+  const tooltipHeight = paddingY * 2 + lineHeight * lines.length;
+  const preferredX = point.x + 14;
+  const fallbackX = point.x - 14 - tooltipWidth;
+  const x = Math.max(
+    8,
+    Math.min(
+      preferredX + tooltipWidth <= layout.cssWidth - 8 ? preferredX : fallbackX,
+      layout.cssWidth - tooltipWidth - 8,
+    ),
+  );
+  const y = Math.max(8, Math.min(point.y - tooltipHeight / 2, layout.cssHeight - tooltipHeight - 8));
+
+  context.fillStyle = 'rgba(17, 24, 39, 0.94)';
+  context.fillRect(x, y, tooltipWidth, tooltipHeight);
+
+  context.fillStyle = '#ffffff';
+  context.textAlign = 'left';
+  lines.forEach((line, index) => {
+    context.fillText(line, x + paddingX, y + paddingY + lineHeight / 2 + index * lineHeight);
+  });
+}
+
+function getCanvasPointerPosition(
+  canvas: HTMLCanvasElement,
+  layout: ChartLayout,
+  clientX: number,
+  clientY: number,
+): { x: number; y: number } {
+  const rect = canvas.getBoundingClientRect();
+  const rectWidth = rect.width || layout.cssWidth || 1;
+  const rectHeight = rect.height || layout.cssHeight || 1;
+
+  return {
+    x: ((clientX - rect.left) / rectWidth) * layout.cssWidth,
+    y: ((clientY - rect.top) / rectHeight) * layout.cssHeight,
+  };
+}
+
+function getDistanceToSegment(
+  pointerX: number,
+  pointerY: number,
+  start: ChartPoint,
+  end: ChartPoint,
+): { distance: number; nearestIndex: number } {
+  const deltaX = end.x - start.x;
+  const deltaY = end.y - start.y;
+  const segmentLengthSquared = deltaX * deltaX + deltaY * deltaY;
+
+  if (segmentLengthSquared === 0) {
+    return {
+      distance: Math.hypot(pointerX - start.x, pointerY - start.y),
+      nearestIndex: start.index,
+    };
+  }
+
+  const projection =
+    ((pointerX - start.x) * deltaX + (pointerY - start.y) * deltaY) / segmentLengthSquared;
+  const clampedProjection = Math.max(0, Math.min(1, projection));
+  const projectedX = start.x + deltaX * clampedProjection;
+  const projectedY = start.y + deltaY * clampedProjection;
+
+  return {
+    distance: Math.hypot(pointerX - projectedX, pointerY - projectedY),
+    nearestIndex: clampedProjection <= 0.5 ? start.index : end.index,
+  };
+}
+
+function getHoveredPointIndex(
+  layout: ChartLayout,
+  pointerX: number,
+  pointerY: number,
+): number | null {
+  let bestIndex: number | null = null;
+  let bestDistance = Number.POSITIVE_INFINITY;
+
+  layout.points.forEach((point) => {
+    const distance = Math.hypot(pointerX - point.x, pointerY - point.y);
+
+    if (distance <= HOVER_HIT_RADIUS && distance < bestDistance) {
+      bestDistance = distance;
+      bestIndex = point.index;
+    }
+  });
+
+  for (let index = 0; index < layout.points.length - 1; index += 1) {
+    const result = getDistanceToSegment(pointerX, pointerY, layout.points[index], layout.points[index + 1]);
+
+    if (result.distance <= HOVER_HIT_RADIUS && result.distance < bestDistance) {
+      bestDistance = result.distance;
+      bestIndex = result.nearestIndex;
+    }
+  }
+
+  return bestIndex;
+}
+
 export function renderInventoryChart(
   canvas: HTMLCanvasElement,
   data: InventoryCalculationResult,
@@ -147,6 +356,7 @@ export function renderInventoryChart(
     shouldUseResponsiveSize?: boolean;
     hasCallerProvidedWidth?: boolean;
     hasCallerProvidedHeight?: boolean;
+    hoveredIndex?: number | null;
   } = {},
 ): void {
   const context = canvas.getContext('2d');
@@ -158,7 +368,9 @@ export function renderInventoryChart(
   const shouldUseResponsiveSize = options.shouldUseResponsiveSize ?? false;
   const hasCallerProvidedWidth = options.hasCallerProvidedWidth ?? false;
   const hasCallerProvidedHeight = options.hasCallerProvidedHeight ?? false;
-  const { width: cssWidth, height: cssHeight } = getContainerSize(canvas);
+  const hoveredIndex = options.hoveredIndex ?? null;
+  const layout = buildChartLayout(canvas, data);
+  const { cssWidth, cssHeight } = layout;
   const devicePixelRatio = window.devicePixelRatio || 1;
   const backingWidth = Math.max(1, Math.round(cssWidth * devicePixelRatio));
   const backingHeight = Math.max(1, Math.round(cssHeight * devicePixelRatio));
@@ -188,39 +400,13 @@ export function renderInventoryChart(
   const ticksFont = '12px sans-serif';
   const labelFont = '13px sans-serif';
   const legendFont = '13px sans-serif';
-  const domain = getYDomain(data);
-  const ticks = buildTicks(domain.min, domain.max);
-  const scaleDomain = {
-    min: ticks[0] ?? domain.min,
-    max: ticks[ticks.length - 1] ?? domain.max,
-  };
-  const longestTickLabel = ticks.reduce(
-    (longest, tick) => Math.max(longest, String(Math.round(tick)).length),
-    0,
-  );
-  const yLabelWidth = Math.max(longestTickLabel * 8 + 16, 48);
-  const margin = {
-    top: 24,
-    right: 24,
-    bottom: 52,
-    left: yLabelWidth,
-  };
   const legendY = 12;
-  const plotLeft = margin.left;
-  const plotTop = margin.top + 18;
-  const plotRight = cssWidth - margin.right;
-  const plotBottom = cssHeight - margin.bottom;
-  const plotWidth = Math.max(1, plotRight - plotLeft);
-  const plotHeight = Math.max(1, plotBottom - plotTop);
-  const xStep = data.months.length > 1 ? plotWidth / (data.months.length - 1) : 0;
-  const getX = (index: number) => plotLeft + xStep * index;
-  const getY = (value: number) =>
-    plotBottom -
-    ((value - scaleDomain.min) / (scaleDomain.max - scaleDomain.min || 1)) * plotHeight;
+  const { plotLeft, plotTop, plotRight, plotBottom, ticks, getX, getY } = layout;
 
   context.textBaseline = 'middle';
 
   context.font = legendFont;
+  context.textAlign = 'left';
   let legendX = plotLeft;
   LEGEND_ITEMS.forEach((item) => {
     context.strokeStyle = item.color;
@@ -281,6 +467,17 @@ export function renderInventoryChart(
     getX,
     getY,
   );
+
+  if (hoveredIndex !== null) {
+    const hoveredPoint = layout.points[hoveredIndex];
+
+    if (hoveredPoint) {
+      drawHoverMarker(context, hoveredPoint);
+      context.font = ticksFont;
+      context.textBaseline = 'middle';
+      drawTooltip(context, layout, hoveredPoint);
+    }
+  }
 }
 
 export function mountInventoryChart(
@@ -302,6 +499,16 @@ export function mountInventoryChart(
   let lastWidth = 0;
   let lastHeight = 0;
   let lastDevicePixelRatio = 0;
+  let hoveredIndex: number | null = null;
+
+  const render = (): void => {
+    renderInventoryChart(canvas, data, {
+      shouldUseResponsiveSize: ownsCanvas,
+      hasCallerProvidedWidth,
+      hasCallerProvidedHeight,
+      hoveredIndex,
+    });
+  };
 
   const redraw = (): void => {
     const { width, height } = getContainerSize(canvas);
@@ -318,11 +525,37 @@ export function mountInventoryChart(
     lastWidth = width;
     lastHeight = height;
     lastDevicePixelRatio = devicePixelRatio;
-    renderInventoryChart(canvas, data, {
-      shouldUseResponsiveSize: ownsCanvas,
-      hasCallerProvidedWidth,
-      hasCallerProvidedHeight,
-    });
+    render();
+  };
+
+  const updateHover = (nextHoveredIndex: number | null): void => {
+    if (hoveredIndex === nextHoveredIndex) {
+      return;
+    }
+
+    hoveredIndex = nextHoveredIndex;
+    render();
+  };
+
+  const handlePointerMove = (event: PointerEvent): void => {
+    const layout = buildChartLayout(canvas, data);
+    const pointer = getCanvasPointerPosition(canvas, layout, event.clientX, event.clientY);
+
+    if (
+      pointer.x < layout.plotLeft - HOVER_HIT_RADIUS ||
+      pointer.x > layout.plotRight + HOVER_HIT_RADIUS ||
+      pointer.y < layout.plotTop - HOVER_HIT_RADIUS ||
+      pointer.y > layout.plotBottom + HOVER_HIT_RADIUS
+    ) {
+      updateHover(null);
+      return;
+    }
+
+    updateHover(getHoveredPointIndex(layout, pointer.x, pointer.y));
+  };
+
+  const handlePointerLeave = (): void => {
+    updateHover(null);
   };
 
   redraw();
@@ -340,6 +573,8 @@ export function mountInventoryChart(
 
   // ResizeObserver does not reliably fire for DPR-only changes.
   window.addEventListener('resize', redraw);
+  canvas.addEventListener('pointermove', handlePointerMove);
+  canvas.addEventListener('pointerleave', handlePointerLeave);
 
   return {
     canvas,
@@ -352,6 +587,8 @@ export function mountInventoryChart(
     destroy: () => {
       resizeObserver?.disconnect();
       window.removeEventListener('resize', redraw);
+      canvas.removeEventListener('pointermove', handlePointerMove);
+      canvas.removeEventListener('pointerleave', handlePointerLeave);
 
       if (ownsCanvas && canvas.parentElement === target) {
         target.replaceChildren();

@@ -492,15 +492,21 @@ function verifyDemoRemount() {
 }
 
 function createCanvasContextStub() {
-  return {
+  const operations = [];
+  let currentPath = [];
+
+  const stub = {
+    operations,
     beginPath() {},
     clearRect() {},
+    fill() {},
     fillRect() {},
     fillText() {},
     lineTo() {},
     moveTo() {},
     setTransform() {},
     stroke() {},
+    arc() {},
     measureText(text) {
       return { width: String(text).length * 7 };
     },
@@ -511,6 +517,100 @@ function createCanvasContextStub() {
     textBaseline: 'alphabetic',
     font: '12px sans-serif',
   };
+
+  stub.beginPath = () => {
+    currentPath = [];
+    operations.push({ type: 'beginPath' });
+  };
+  stub.clearRect = (x, y, width, height) => {
+    operations.push({ type: 'clearRect', x, y, width, height });
+  };
+  stub.fillRect = (x, y, width, height) => {
+    operations.push({ type: 'fillRect', x, y, width, height, fillStyle: stub.fillStyle });
+  };
+  stub.fill = () => {
+    operations.push({
+      type: 'fill',
+      fillStyle: stub.fillStyle,
+      path: currentPath.map((segment) => ({ ...segment })),
+    });
+  };
+  stub.fillText = (text, x, y) => {
+    operations.push({
+      type: 'fillText',
+      text,
+      x,
+      y,
+      fillStyle: stub.fillStyle,
+      font: stub.font,
+      textAlign: stub.textAlign,
+    });
+  };
+  stub.lineTo = (x, y) => {
+    currentPath.push({ type: 'lineTo', x, y });
+    operations.push({ type: 'lineTo', x, y });
+  };
+  stub.moveTo = (x, y) => {
+    currentPath.push({ type: 'moveTo', x, y });
+    operations.push({ type: 'moveTo', x, y });
+  };
+  stub.setTransform = (a, b, c, d, e, f) => {
+    operations.push({ type: 'setTransform', a, b, c, d, e, f });
+  };
+  stub.stroke = () => {
+    operations.push({
+      type: 'stroke',
+      strokeStyle: stub.strokeStyle,
+      lineWidth: stub.lineWidth,
+      path: currentPath.map((segment) => ({ ...segment })),
+    });
+  };
+  stub.arc = (x, y, radius, startAngle, endAngle) => {
+    currentPath.push({ type: 'arc', x, y, radius, startAngle, endAngle });
+    operations.push({ type: 'arc', x, y, radius, startAngle, endAngle });
+  };
+  stub.resetOperations = () => {
+    operations.length = 0;
+    currentPath = [];
+  };
+
+  return stub;
+}
+
+function getSeriesPath(contextStub, color) {
+  const matchingStrokes = contextStub.operations.filter(
+    (operation) =>
+      operation.type === 'stroke' &&
+      operation.strokeStyle === color &&
+      operation.path.filter(
+        (segment) => segment.type === 'moveTo' || segment.type === 'lineTo',
+      ).length > 1,
+  );
+
+  assert.ok(matchingStrokes.length > 0, `Could not find a stroked path for ${color}.`);
+
+  return matchingStrokes.reduce((longest, candidate) =>
+    candidate.path.length > longest.path.length ? candidate : longest,
+  );
+}
+
+function getSeriesPolylinePoints(pathOperation) {
+  return pathOperation.path.filter(
+    (segment) => segment.type === 'moveTo' || segment.type === 'lineTo',
+  );
+}
+
+function getTooltipTexts(contextStub) {
+  return contextStub.operations
+    .filter((operation) => operation.type === 'fillText')
+    .map((operation) => operation.text)
+    .filter((text) => text.startsWith('Month:') || text.startsWith('End Inv:'));
+}
+
+function getFillTextOperation(contextStub, text) {
+  return contextStub.operations.find(
+    (operation) => operation.type === 'fillText' && operation.text === text,
+  );
 }
 
 function verifyBundleSmoke() {
@@ -535,10 +635,39 @@ function verifyBundleSmoke() {
       this.clientWidth = 640;
       this.clientHeight = 360;
       this._context = createCanvasContextStub();
+      this._listeners = new Map();
     }
 
     getContext(kind) {
       return kind === '2d' ? this._context : null;
+    }
+
+    addEventListener(type, handler) {
+      this._listeners.set(type, handler);
+    }
+
+    removeEventListener(type, handler) {
+      if (this._listeners.get(type) === handler) {
+        this._listeners.delete(type);
+      }
+    }
+
+    getBoundingClientRect() {
+      const width = this.style.width.endsWith('%')
+        ? this.parentElement?.clientWidth ?? this.clientWidth
+        : Number.parseFloat(this.style.width) || this.clientWidth;
+      const height = this.style.height.endsWith('%')
+        ? this.parentElement?.clientHeight ?? this.clientHeight
+        : Number.parseFloat(this.style.height) || this.clientHeight;
+
+      return {
+        left: 0,
+        top: 0,
+        right: width,
+        bottom: height,
+        width,
+        height,
+      };
     }
   }
 
@@ -563,10 +692,17 @@ function verifyBundleSmoke() {
 
   const container = new HTMLDivElement();
   const createdElements = [];
+  const windowListeners = new Map();
   const windowStub = {
     devicePixelRatio: 1,
-    addEventListener() {},
-    removeEventListener() {},
+    addEventListener(type, handler) {
+      windowListeners.set(type, handler);
+    },
+    removeEventListener(type, handler) {
+      if (windowListeners.get(type) === handler) {
+        windowListeners.delete(type);
+      }
+    },
   };
   const documentStub = {
     querySelector(selector) {
@@ -611,10 +747,113 @@ function verifyBundleSmoke() {
   assert.equal(handle.canvas.style.width, '100%', 'Owned canvas did not receive responsive width styling.');
   assert.equal(typeof handle.redraw, 'function', 'Mount handle is missing redraw().');
   assert.equal(typeof handle.destroy, 'function', 'Mount handle is missing destroy().');
+  assert.equal(
+    typeof handle.canvas._listeners.get('pointermove'),
+    'function',
+    'Canvas is missing pointermove hover handling.',
+  );
+  assert.equal(
+    typeof handle.canvas._listeners.get('pointerleave'),
+    'function',
+    'Canvas is missing pointerleave hover handling.',
+  );
+  assert.equal(typeof windowListeners.get('resize'), 'function', 'Mount should register a window resize listener.');
+
+  const pointerMove = handle.canvas._listeners.get('pointermove');
+  const pointerLeave = handle.canvas._listeners.get('pointerleave');
+  const contextStub = handle.canvas._context;
+  const endInvPath = getSeriesPath(contextStub, '#2563eb');
+  const safetyStockPath = getSeriesPath(contextStub, '#dc2626');
+  const endInvPoints = getSeriesPolylinePoints(endInvPath);
+  const safetyStockPoints = getSeriesPolylinePoints(safetyStockPath);
+  const [firstEndInvPoint, secondEndInvPoint] = endInvPoints;
+  const [firstSafetyPoint] = safetyStockPoints;
+
+  assert.ok(firstEndInvPoint, 'Could not derive the first End Inv point from drawing operations.');
+  assert.ok(secondEndInvPoint, 'Could not derive the second End Inv point from drawing operations.');
+  assert.ok(firstSafetyPoint, 'Could not derive the first Safety Stock point from drawing operations.');
+
+  const firstEndInvSegmentMidpoint = {
+    x: (firstEndInvPoint.x + secondEndInvPoint.x) / 2,
+    y: (firstEndInvPoint.y + secondEndInvPoint.y) / 2,
+  };
+
+  contextStub.resetOperations();
+  pointerMove({
+    clientX: firstEndInvSegmentMidpoint.x,
+    clientY: firstEndInvSegmentMidpoint.y,
+  });
+
+  const hoverTexts = getTooltipTexts(contextStub);
+  assert.equal(
+    contextStub.operations.some((operation) => operation.type === 'clearRect'),
+    true,
+    'Hover should redraw the canvas even when size and DPR are unchanged.',
+  );
+  assert.equal(
+    contextStub.operations.some(
+      (operation) => operation.type === 'arc' && operation.radius > 0,
+    ),
+    true,
+    'Hovering near an End Inv line segment should draw a point marker.',
+  );
+  assert.deepEqual(
+    hoverTexts,
+    ['Month: Jun 2026', 'End Inv: 1,883'],
+    'Hovering near the first End Inv segment should resolve to the nearest existing month point.',
+  );
+  assert.equal(
+    getFillTextOperation(contextStub, 'End Inv')?.textAlign,
+    'left',
+    'Hover redraw should render the legend label with left-aligned text.',
+  );
+  assert.equal(
+    getFillTextOperation(contextStub, 'Safety Stock')?.textAlign,
+    'left',
+    'Hover redraw should keep all legend labels left-aligned.',
+  );
+
+  contextStub.resetOperations();
+  pointerLeave();
+  contextStub.resetOperations();
+  pointerMove({ clientX: firstEndInvPoint.x + 4, clientY: firstEndInvPoint.y + 2 });
+  assert.deepEqual(
+    getTooltipTexts(contextStub),
+    ['Month: Jun 2026', 'End Inv: 1,883'],
+    'Hover tooltip should still show the hovered End Inv point month and value.',
+  );
+
+  contextStub.resetOperations();
+  pointerLeave();
+  assert.equal(
+    contextStub.operations.some((operation) => operation.type === 'clearRect'),
+    true,
+    'Pointer leave should redraw the canvas to clear hover state.',
+  );
+  assert.deepEqual(getTooltipTexts(contextStub), [], 'Pointer leave should clear the hover tooltip.');
+
+  contextStub.resetOperations();
+  pointerMove({ clientX: firstSafetyPoint.x, clientY: firstSafetyPoint.y });
+  assert.deepEqual(
+    getTooltipTexts(contextStub),
+    [],
+    'Hovering near the Safety Stock line alone should not show an End Inv tooltip.',
+  );
 
   handle.redraw();
   handle.destroy();
 
+  assert.equal(
+    handle.canvas._listeners.has('pointermove'),
+    false,
+    'Destroy should remove the pointermove listener.',
+  );
+  assert.equal(
+    handle.canvas._listeners.has('pointerleave'),
+    false,
+    'Destroy should remove the pointerleave listener.',
+  );
+  assert.equal(windowListeners.has('resize'), false, 'Destroy should remove the window resize listener.');
   assert.equal(container.children.length, 0, 'Destroy did not clean up the owned canvas.');
 }
 
