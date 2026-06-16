@@ -21,14 +21,61 @@
         margin: 0 auto;
       }
 
+      .demo-layout {
+        display: grid;
+        gap: 20px;
+      }
+
+      .controls-frame,
       .graph-frame {
-        width: min(100%, 900px);
-        margin: 0 auto;
         background: #ffffff;
         border: 1px solid #d1d5db;
         border-radius: 12px;
         padding: 16px;
         box-sizing: border-box;
+      }
+
+      .controls-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        gap: 16px;
+      }
+
+      .control-field {
+        display: grid;
+        gap: 8px;
+      }
+
+      .control-field label {
+        font-size: 14px;
+        font-weight: 600;
+      }
+
+      .control-field input {
+        width: 100%;
+        padding: 10px 12px;
+        border: 1px solid #d1d5db;
+        border-radius: 8px;
+        box-sizing: border-box;
+        font: inherit;
+      }
+
+      .control-field input:focus {
+        outline: 2px solid #93c5fd;
+        outline-offset: 1px;
+        border-color: #2563eb;
+      }
+
+      fieldset {
+        margin: 0;
+        padding: 0;
+        border: 0;
+      }
+
+      legend {
+        margin-bottom: 16px;
+        font-size: 16px;
+        font-weight: 700;
       }
 
       #inventory-graph {
@@ -39,23 +86,91 @@
   <body>
     <main class="demo-shell">
       <h1>Inventory Graph Demo</h1>
-      <div class="graph-frame">
-        <div id="inventory-graph"></div>
+      <div class="demo-layout">
+        <fieldset class="controls-frame" id="inventory-controls">
+          <legend>Graph Options</legend>
+          <div class="controls-grid">
+            <div class="control-field">
+              <label for="startingInventory">Starting Inventory</label>
+              <input id="startingInventory" name="startingInventory" type="number" min="0" step="1" value="2000" />
+            </div>
+            <div class="control-field">
+              <label for="annualDemand">Annual Demand (units)</label>
+              <input id="annualDemand" name="annualDemand" type="number" min="0" step="1" value="7000" />
+            </div>
+            <div class="control-field">
+              <label for="costPerOrder">Cost Per Order (total cost, $)</label>
+              <input id="costPerOrder" name="costPerOrder" type="number" min="0" step="0.01" value="500" />
+            </div>
+            <div class="control-field">
+              <label for="holdingCostPerUnit">Holding Cost Per Unit (per unit, $)</label>
+              <input id="holdingCostPerUnit" name="holdingCostPerUnit" type="number" min="0.01" step="0.01" value="2.5" />
+            </div>
+            <div class="control-field">
+              <label for="maxMonthlySales">Max Monthly Sales (units)</label>
+              <input id="maxMonthlySales" name="maxMonthlySales" type="number" min="0" step="1" value="450" />
+            </div>
+            <div class="control-field">
+              <label for="maxLeadTime">Max Lead Time</label>
+              <input id="maxLeadTime" name="maxLeadTime" type="number" min="0" step="1" value="4" />
+            </div>
+            <div class="control-field">
+              <label for="averageMonthlySales">Average Monthly Sales (units)</label>
+              <input id="averageMonthlySales" name="averageMonthlySales" type="number" min="0" step="1" value="250" />
+            </div>
+            <div class="control-field">
+              <label for="averageLeadTime">Average Lead Time</label>
+              <input id="averageLeadTime" name="averageLeadTime" type="number" min="0" step="1" value="2" />
+            </div>
+          </div>
+        </fieldset>
+        <div class="graph-frame">
+          <div id="inventory-graph"></div>
+        </div>
       </div>
     </main>
 
     <script src="./dist/inventory-graph.min.js"></script>
     <script>
-      InventoryGraph.mount("#inventory-graph", {
-        startingInventory: 2000,
-        annualDemand: 7000,
-        costPerOrder: 500,
-        holdingCostPerUnit: 2.5,
-        maxMonthlySales: 450,
-        maxLeadTime: 4,
-        averageMonthlySales: 250,
-        averageLeadTime: 2
-      });
+      const inventoryOptionFields = [
+        { name: "startingInventory", allowZero: true },
+        { name: "annualDemand", allowZero: true },
+        { name: "costPerOrder", allowZero: true },
+        { name: "holdingCostPerUnit", allowZero: false },
+        { name: "maxMonthlySales", allowZero: true },
+        { name: "maxLeadTime", allowZero: true },
+        { name: "averageMonthlySales", allowZero: true },
+        { name: "averageLeadTime", allowZero: true }
+      ];
+
+      const controlsForm = document.getElementById("inventory-controls");
+      let chartHandle;
+
+      function readInventoryOptions() {
+        const options = {};
+
+        inventoryOptionFields.forEach(({ name, allowZero }) => {
+          const input = controlsForm.elements.namedItem(name);
+          const parsedValue = Number.parseFloat(input.value);
+          const defaultValue = Number.parseFloat(input.defaultValue);
+          const isValid = Number.isFinite(parsedValue) && (allowZero ? parsedValue >= 0 : parsedValue > 0);
+
+          options[name] = isValid ? parsedValue : defaultValue;
+        });
+
+        return options;
+      }
+
+      function mountChart() {
+        if (chartHandle) {
+          chartHandle.destroy();
+        }
+
+        chartHandle = InventoryGraph.mount("#inventory-graph", readInventoryOptions());
+      }
+
+      controlsForm.addEventListener("input", mountChart);
+      mountChart();
     </script>
   </body>
 </html>

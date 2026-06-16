@@ -47,6 +47,17 @@ const expectedWorkbook = {
   ],
 };
 
+const expectedDemoFields = [
+  { name: 'startingInventory', value: '2000', min: '0', step: '1' },
+  { name: 'annualDemand', value: '7000', min: '0', step: '1' },
+  { name: 'costPerOrder', value: '500', min: '0', step: '0.01' },
+  { name: 'holdingCostPerUnit', value: '2.5', min: '0.01', step: '0.01' },
+  { name: 'maxMonthlySales', value: '450', min: '0', step: '1' },
+  { name: 'maxLeadTime', value: '4', min: '0', step: '1' },
+  { name: 'averageMonthlySales', value: '250', min: '0', step: '1' },
+  { name: 'averageLeadTime', value: '2', min: '0', step: '1' },
+];
+
 function ensureArtifactDirectory() {
   fs.mkdirSync(rawDir, { recursive: true });
 }
@@ -326,6 +337,158 @@ function verifyDemoHtml() {
     /InventoryGraph\.mount\(\s*"#inventory-graph"\s*,/,
     'demo.html must call InventoryGraph.mount("#inventory-graph", options).',
   );
+  assert.doesNotMatch(
+    demoHtml,
+    /document\.createElement|innerHTML|insertAdjacentHTML/,
+    'demo.html must not dynamically build form markup.',
+  );
+  assert.match(
+    demoHtml,
+    /<fieldset[^>]*(id="inventory-controls"[^>]*class="controls-frame"|class="controls-frame"[^>]*id="inventory-controls")[^>]*>/,
+    'demo.html must use a non-submitting fieldset container for the controls.',
+  );
+  assert.doesNotMatch(
+    demoHtml,
+    /<form[^>]*id="inventory-controls"/,
+    'demo.html must not use a submitting form wrapper for the controls.',
+  );
+
+  expectedDemoFields.forEach(({ name, value, min, step }) => {
+    assert.match(
+      demoHtml,
+      new RegExp(
+        `<input[^>]*name="${name}"[^>]*type="number"[^>]*min="${min}"[^>]*step="${step}"[^>]*value="${value}"`,
+      ),
+      `demo.html is missing the static ${name} number input.`,
+    );
+  });
+}
+
+function extractInlineDemoScript(demoHtml) {
+  const match = demoHtml.match(
+    /<script\s+src="\.\/dist\/inventory-graph\.min\.js"><\/script>\s*<script>([\s\S]*?)<\/script>\s*<\/body>/,
+  );
+
+  assert.ok(match?.[1], 'Could not extract the inline demo script from demo.html.');
+  return match[1];
+}
+
+function createDemoInput({ name, value, defaultValue }) {
+  return {
+    name,
+    value,
+    defaultValue,
+  };
+}
+
+function normalizeDemoOptions(options) {
+  return JSON.parse(JSON.stringify(options));
+}
+
+function verifyDemoRemount() {
+  const demoHtml = fs.readFileSync(path.join(repoRoot, 'demo.html'), 'utf8');
+  const inlineScript = extractInlineDemoScript(demoHtml);
+  const controls = new Map(
+    expectedDemoFields.map(({ name, value }) => [
+      name,
+      createDemoInput({ name, value, defaultValue: value }),
+    ]),
+  );
+  const listeners = new Map();
+  const mountCalls = [];
+  const destroyedHandles = [];
+  let nextHandleId = 0;
+
+  const controlsForm = {
+    elements: {
+      namedItem(name) {
+        return controls.get(name) ?? null;
+      },
+    },
+    addEventListener(type, handler) {
+      listeners.set(type, handler);
+    },
+  };
+
+  const documentStub = {
+    getElementById(id) {
+      assert.equal(id, 'inventory-controls', 'Demo script queried an unexpected element id.');
+      return controlsForm;
+    },
+  };
+
+  const InventoryGraph = {
+    mount(selector, options) {
+      mountCalls.push({ selector, options });
+      const handleId = nextHandleId;
+      nextHandleId += 1;
+
+      return {
+        destroy() {
+          destroyedHandles.push(handleId);
+        },
+      };
+    },
+  };
+
+  const context = vm.createContext({
+    document: documentStub,
+    InventoryGraph,
+    Number,
+  });
+
+  vm.runInContext(inlineScript, context, { filename: 'demo-inline-script.js' });
+
+  assert.equal(listeners.has('input'), true, 'Demo controls did not register an input listener.');
+  assert.equal(mountCalls.length, 1, 'Demo script should mount the graph on initial load.');
+  assert.equal(
+    mountCalls[0].selector,
+    '#inventory-graph',
+    'Demo initial mount should target #inventory-graph.',
+  );
+  assert.deepEqual(
+    normalizeDemoOptions(mountCalls[0].options),
+    {
+      startingInventory: 2000,
+      annualDemand: 7000,
+      costPerOrder: 500,
+      holdingCostPerUnit: 2.5,
+      maxMonthlySales: 450,
+      maxLeadTime: 4,
+      averageMonthlySales: 250,
+      averageLeadTime: 2,
+    },
+    'Demo initial mount should use the static default input values.',
+  );
+
+  controls.get('annualDemand').value = '';
+  controls.get('holdingCostPerUnit').value = '0';
+  controls.get('maxLeadTime').value = '-5';
+  controls.get('averageMonthlySales').value = '300';
+
+  listeners.get('input')();
+
+  assert.equal(mountCalls.length, 2, 'Demo input changes should remount the graph.');
+  assert.deepEqual(destroyedHandles, [0], 'Demo remount should destroy the previous chart handle.');
+  assert.equal(
+    mountCalls[1].selector,
+    '#inventory-graph',
+    'Demo remount should target #inventory-graph.',
+  );
+  assert.deepEqual(
+    normalizeDemoOptions(mountCalls[1].options),
+    {
+      startingInventory: 2000,
+      annualDemand: 7000,
+      costPerOrder: 500,
+      holdingCostPerUnit: 2.5,
+      maxMonthlySales: 450,
+      maxLeadTime: 4,
+      averageMonthlySales: 300,
+      averageLeadTime: 2,
+    },
+    'Demo remount should fall back to static defaults for invalid values.',
+  );
 }
 
 function createCanvasContextStub() {
@@ -461,6 +624,7 @@ async function main() {
   runBuild();
   verifyBundleSmoke();
   verifyDemoHtml();
+  verifyDemoRemount();
 
   const summary = {
     verifiedAt: new Date().toISOString(),
@@ -469,6 +633,7 @@ async function main() {
     buildOutput: 'dist/inventory-graph.min.js',
     demoHtmlChecked: true,
     bundleSmokeChecked: true,
+    demoRemountChecked: true,
   };
 
   ensureArtifactDirectory();
