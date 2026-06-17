@@ -66,6 +66,28 @@
         border-color: #2563eb;
       }
 
+      .controls-actions {
+        margin-top: 16px;
+        display: flex;
+        justify-content: flex-end;
+      }
+
+      #inventory-calculate {
+        border: 0;
+        border-radius: 999px;
+        padding: 12px 20px;
+        background: #2563eb;
+        color: #ffffff;
+        font: inherit;
+        font-weight: 600;
+        cursor: pointer;
+      }
+
+      #inventory-calculate:focus {
+        outline: 2px solid #93c5fd;
+        outline-offset: 2px;
+      }
+
       fieldset {
         margin: 0;
         padding: 0;
@@ -80,6 +102,80 @@
 
       #inventory-graph {
         min-height: 360px;
+      }
+
+      .graph-frame[hidden] {
+        display: none;
+      }
+
+      .calc_modal {
+        position: fixed;
+        inset: 0;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+        box-sizing: border-box;
+        background: rgba(17, 24, 39, 0.6);
+      }
+
+      .calc_modal.show {
+        display: flex;
+      }
+
+      .calc_modal-card {
+        width: min(100%, 480px);
+        background: #ffffff;
+        border-radius: 16px;
+        padding: 24px;
+        box-sizing: border-box;
+      }
+
+      .calc_modal-card h2 {
+        margin-top: 0;
+      }
+
+      .calc_modal-card p:last-child {
+        margin-bottom: 0;
+      }
+
+      .w-form {
+        margin-top: 1rem;
+      }
+
+      .w-form label {
+        display: block;
+        margin-bottom: 0.5rem;
+        font-weight: 600;
+      }
+
+      .w-form input {
+        width: 100%;
+        box-sizing: border-box;
+        padding: 0.65rem 0.75rem;
+        border: 1px solid #cbd5e1;
+        border-radius: 0.5rem;
+        margin-bottom: 0.75rem;
+      }
+
+      .w-form button {
+        width: 100%;
+        padding: 0.75rem 1rem;
+        border: 0;
+        border-radius: 999px;
+        background: #1d4ed8;
+        color: #ffffff;
+        font-weight: 600;
+        cursor: pointer;
+      }
+
+      .w-form-done {
+        display: none;
+        margin-top: 1rem;
+        padding: 0.85rem 1rem;
+        border-radius: 0.75rem;
+        background: #dcfce7;
+        color: #166534;
       }
     </style>
   </head>
@@ -123,15 +219,35 @@
               <input id="averageLeadTime" name="averageLeadTime" type="number" min="0" step="1" value="2" />
             </div>
           </div>
+          <div class="controls-actions">
+            <button id="inventory-calculate" type="button">Calculate</button>
+          </div>
         </fieldset>
-        <div class="graph-frame">
+        <div class="graph-frame" id="inventory-results" hidden>
           <div id="inventory-graph"></div>
         </div>
       </div>
     </main>
+    <div class="calc_modal" aria-live="polite">
+      <div class="calc_modal-card">
+        <h2>Unlock Calculator Results</h2>
+        <p>Submit the Webflow form to unlock the saved calculator results flow.</p>
+        <div class="w-form">
+          <form id="calc-unlock-form">
+            <label for="calc-unlock-email">Work Email</label>
+            <input id="calc-unlock-email" name="email" type="email" placeholder="name@company.com" required />
+            <button type="submit">Unlock Results</button>
+          </form>
+        </div>
+        <div class="w-form-done">
+          Form submitted successfully. Calculator access is unlocked.
+        </div>
+      </div>
+    </div>
 
     <script src="./dist/inventory-graph.min.js"></script>
     <script>
+      const STORAGE_KEY = "imsCalcResults:v1";
       const inventoryOptionFields = [
         { name: "startingInventory", allowZero: true },
         { name: "annualDemand", allowZero: true },
@@ -144,13 +260,23 @@
       ];
 
       const controlsForm = document.getElementById("inventory-controls");
+      const calculateButton = document.getElementById("inventory-calculate");
+      const graphResults = document.getElementById("inventory-results");
+      const modalElement = document.querySelector(".calc_modal");
       let chartHandle;
+      let hasAccess = false;
+      let pendingCalculation = null;
+      let successObserver = null;
+
+      function getInputElement(name) {
+        return controlsForm.elements.namedItem(name);
+      }
 
       function readInventoryOptions() {
         const options = {};
 
         inventoryOptionFields.forEach(({ name, allowZero }) => {
-          const input = controlsForm.elements.namedItem(name);
+          const input = getInputElement(name);
           const parsedValue = Number.parseFloat(input.value);
           const defaultValue = Number.parseFloat(input.defaultValue);
           const isValid = Number.isFinite(parsedValue) && (allowZero ? parsedValue >= 0 : parsedValue > 0);
@@ -161,16 +287,280 @@
         return options;
       }
 
-      function mountChart() {
+      function applyInventoryOptions(options) {
+        inventoryOptionFields.forEach(({ name }) => {
+          const input = getInputElement(name);
+          input.value = String(options[name]);
+        });
+      }
+
+      function setResultsVisible(isVisible) {
+        if (!graphResults) {
+          return;
+        }
+
+        graphResults.hidden = !isVisible;
+      }
+
+      function mountChart(options) {
         if (chartHandle) {
           chartHandle.destroy();
         }
 
-        chartHandle = InventoryGraph.mount("#inventory-graph", readInventoryOptions());
+        setResultsVisible(true);
+        chartHandle = InventoryGraph.mount("#inventory-graph", options);
+        return chartHandle;
       }
 
-      controlsForm.addEventListener("input", mountChart);
-      mountChart();
+      function serializeCalculationResult(result) {
+        return {
+          eoq: result.eoq,
+          safetyStock: result.safetyStock,
+          months: result.months.map((month) => ({
+            month: month.month.toISOString(),
+            fulfillment: month.fulfillment,
+            beginningInventory: month.beginningInventory,
+            receipts: month.receipts,
+            endingInventory: month.endingInventory,
+            safetyStock: month.safetyStock
+          }))
+        };
+      }
+
+      function persistSavedCalculation(inputs, startDate, result) {
+        const savedState = {
+          version: 1,
+          savedAt: new Date().toISOString(),
+          startDate: startDate.toISOString(),
+          inputs,
+          results: serializeCalculationResult(result)
+        };
+
+        try {
+          window.localStorage.setItem(STORAGE_KEY, JSON.stringify(savedState));
+        } catch {
+          return false;
+        }
+
+        return true;
+      }
+
+      function isValidSavedResults(results) {
+        if (!results || typeof results !== "object" || !Number.isFinite(results.eoq) || !Number.isFinite(results.safetyStock) || !Array.isArray(results.months) || results.months.length !== 12) {
+          return false;
+        }
+
+        return results.months.every((month) => {
+          if (!month || typeof month !== "object" || !isStrictIsoString(month.month)) {
+            return false;
+          }
+
+          return Number.isFinite(month.fulfillment) &&
+            Number.isFinite(month.beginningInventory) &&
+            Number.isFinite(month.receipts) &&
+            Number.isFinite(month.endingInventory) &&
+            Number.isFinite(month.safetyStock);
+        });
+      }
+
+      function isStrictIsoString(value) {
+        if (typeof value !== "string") {
+          return false;
+        }
+
+        const parsedDate = new Date(value);
+        return Number.isFinite(parsedDate.getTime()) && parsedDate.toISOString() === value;
+      }
+
+      function parseSavedCalculation() {
+        let rawValue;
+
+        try {
+          rawValue = window.localStorage.getItem(STORAGE_KEY);
+        } catch {
+          return null;
+        }
+
+        if (!rawValue) {
+          return null;
+        }
+
+        let savedState;
+
+        try {
+          savedState = JSON.parse(rawValue);
+        } catch {
+          return null;
+        }
+
+        if (!savedState || typeof savedState !== "object" || savedState.version !== 1 || typeof savedState.startDate !== "string" || typeof savedState.savedAt !== "string") {
+          return null;
+        }
+
+        if (!isStrictIsoString(savedState.startDate) || !isStrictIsoString(savedState.savedAt)) {
+          return null;
+        }
+
+        const startDate = new Date(savedState.startDate);
+
+        const inputs = savedState.inputs;
+
+        if (!inputs || typeof inputs !== "object") {
+          return null;
+        }
+
+        const normalizedInputs = {};
+        let isValid = true;
+
+        inventoryOptionFields.forEach(({ name, allowZero }) => {
+          const value = inputs[name];
+
+          if (!Number.isFinite(value) || (allowZero ? value < 0 : value <= 0)) {
+            isValid = false;
+            return;
+          }
+
+          normalizedInputs[name] = value;
+        });
+
+        if (!isValid || !isValidSavedResults(savedState.results)) {
+          return null;
+        }
+
+        return {
+          inputs: normalizedInputs,
+          startDate,
+          results: savedState.results
+        };
+      }
+
+      function disconnectSuccessObserver() {
+        if (!successObserver) {
+          return;
+        }
+
+        successObserver.disconnect();
+        successObserver = null;
+      }
+
+      function getModalSuccessElements() {
+        if (!modalElement) {
+          return [];
+        }
+
+        return Array.from(modalElement.querySelectorAll(".w-form-done"));
+      }
+
+      function isModalSuccessVisible(successElement) {
+        if (!modalElement || !successElement || !modalElement.contains(successElement)) {
+          return false;
+        }
+
+        if (typeof window.getComputedStyle === "function") {
+          const computedStyle = window.getComputedStyle(successElement);
+
+          if (computedStyle.display === "none" || computedStyle.visibility === "hidden" || computedStyle.opacity === "0") {
+            return false;
+          }
+        }
+
+        return true;
+      }
+
+      function unlockPendingCalculation() {
+        if (hasAccess || !pendingCalculation) {
+          return false;
+        }
+
+        const hasVisibleSuccess = getModalSuccessElements().some((successElement) =>
+          isModalSuccessVisible(successElement)
+        );
+
+        if (!hasVisibleSuccess) {
+          return false;
+        }
+
+        disconnectSuccessObserver();
+        hasAccess = true;
+
+        const unlockedCalculation = pendingCalculation;
+        pendingCalculation = null;
+        const handle = mountChart({
+          ...unlockedCalculation.inputs,
+          startDate: unlockedCalculation.startDate
+        });
+
+        persistSavedCalculation(unlockedCalculation.inputs, unlockedCalculation.startDate, handle.result);
+        return true;
+      }
+
+      function observeModalSuccess() {
+        if (successObserver || !modalElement || typeof MutationObserver !== "function") {
+          return;
+        }
+
+        successObserver = new MutationObserver(() => {
+          unlockPendingCalculation();
+        });
+        successObserver.observe(modalElement, {
+          childList: true,
+          subtree: true,
+          attributes: true,
+          attributeFilter: ["class", "style"]
+        });
+      }
+
+      function calculateAndPersist(options) {
+        const startDate = new Date();
+        const handle = mountChart({
+          ...options,
+          startDate
+        });
+
+        persistSavedCalculation(options, startDate, handle.result);
+      }
+
+      function handleCalculateClick() {
+        const options = readInventoryOptions();
+
+        if (hasAccess) {
+          calculateAndPersist(options);
+          return;
+        }
+
+        pendingCalculation = {
+          inputs: options,
+          startDate: new Date()
+        };
+
+        if (!modalElement) {
+          return;
+        }
+
+        modalElement.classList.add("show");
+        observeModalSuccess();
+        unlockPendingCalculation();
+      }
+
+      function initializeDemo() {
+        setResultsVisible(false);
+
+        const savedCalculation = parseSavedCalculation();
+
+        if (!savedCalculation) {
+          return;
+        }
+
+        hasAccess = true;
+        applyInventoryOptions(savedCalculation.inputs);
+        mountChart({
+          ...savedCalculation.inputs,
+          startDate: savedCalculation.startDate
+        });
+      }
+
+      calculateButton.addEventListener("click", handleCalculateClick);
+      initializeDemo();
     </script>
   </body>
 </html>

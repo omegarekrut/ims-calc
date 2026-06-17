@@ -1,14 +1,19 @@
 import {
   calculateInventoryData,
+  type InventoryCalculationResult,
   type InventoryCalculationOptions,
 } from './inventoryFormulas';
 import { mountInventoryChart, type InventoryChartHandle } from './inventoryCanvas';
+
+export interface InventoryGraphMountHandle extends InventoryChartHandle {
+  result: InventoryCalculationResult;
+}
 
 export interface InventoryGraphApi {
   mount: (
     selector: string,
     options?: InventoryCalculationOptions,
-  ) => InventoryChartHandle;
+  ) => InventoryGraphMountHandle;
 }
 
 function resolveTarget(selector: string): Element {
@@ -34,15 +39,20 @@ function resolveTarget(selector: string): Element {
 function mount(
   selector: string,
   options?: InventoryCalculationOptions,
-): InventoryChartHandle {
+): InventoryGraphMountHandle {
   const target = resolveTarget(selector);
 
   if (!(target instanceof HTMLElement)) {
     throw new Error(`InventoryGraph.mount requires an HTMLElement for selector "${selector}".`);
   }
 
-  const data = calculateInventoryData(options);
-  return mountInventoryChart(target, data);
+  const result = calculateInventoryData(options);
+  const chartHandle = mountInventoryChart(target, result);
+
+  return {
+    ...chartHandle,
+    result,
+  };
 }
 
 const inventoryGraph: InventoryGraphApi = { mount };
@@ -54,4 +64,3 @@ declare global {
 }
 
 window.InventoryGraph = inventoryGraph;
-

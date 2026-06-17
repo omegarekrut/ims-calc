@@ -339,8 +339,8 @@ function verifyDemoHtml() {
   );
   assert.doesNotMatch(
     demoHtml,
-    /document\.createElement|innerHTML|insertAdjacentHTML/,
-    'demo.html must not dynamically build form markup.',
+    /innerHTML|insertAdjacentHTML/,
+    'demo.html must not dynamically build modal, form, or result markup.',
   );
   assert.match(
     demoHtml,
@@ -351,6 +351,61 @@ function verifyDemoHtml() {
     demoHtml,
     /<form[^>]*id="inventory-controls"/,
     'demo.html must not use a submitting form wrapper for the controls.',
+  );
+  assert.match(
+    demoHtml,
+    /<button[^>]*id="inventory-calculate"[^>]*type="button"[^>]*>\s*Calculate\s*<\/button>/,
+    'demo.html must contain a static Calculate button.',
+  );
+  assert.match(
+    demoHtml,
+    /<div[^>]*class="calc_modal"[^>]*>/,
+    'demo.html must contain static .calc_modal markup.',
+  );
+  assert.match(
+    demoHtml,
+    /<form[^>]*id="calc-unlock-form"[^>]*>/,
+    'demo.html must contain a static modal unlock form.',
+  );
+  assert.match(
+    demoHtml,
+    /<input[^>]*id="calc-unlock-email"[^>]*name="email"[^>]*type="email"[^>]*>/,
+    'demo.html must contain a static modal email field for the unlock flow.',
+  );
+  assert.doesNotMatch(
+    demoHtml,
+    /<input[^>]*id="calc-unlock-email"[^>]*\bvalue=/,
+    'demo.html must not prefill the modal email field.',
+  );
+  assert.match(
+    demoHtml,
+    /<div[^>]*class="w-form-done"[^>]*>/,
+    'demo.html must contain a static .w-form-done placeholder.',
+  );
+  assert.doesNotMatch(
+    demoHtml,
+    /<div[^>]*class="w-form-done"[^>]*hidden[^>]*>/,
+    'demo.html must not rely on the hidden attribute for the Webflow success block.',
+  );
+  assert.match(
+    demoHtml,
+    /\.calc_modal\s*\{[\s\S]*?display:\s*none;/,
+    'demo.html must hide .calc_modal by default with static CSS.',
+  );
+  assert.match(
+    demoHtml,
+    /\.calc_modal\.show\s*\{[\s\S]*?display:\s*flex;/,
+    'demo.html must show .calc_modal.show with display: flex.',
+  );
+  assert.doesNotMatch(
+    demoHtml,
+    /document\.createElement\((?!['"]canvas['"]\))/,
+    'demo.html must not dynamically create non-canvas UI elements.',
+  );
+  assert.doesNotMatch(
+    demoHtml,
+    /calc-demo-unlock|Demo Only:\s*Simulate Webflow Success|revealLatestSuccessElement/,
+    'demo.html must not expose a demo-only unlock path.',
   );
 
   expectedDemoFields.forEach(({ name, value, min, step }) => {
@@ -382,10 +437,250 @@ function createDemoInput({ name, value, defaultValue }) {
 }
 
 function normalizeDemoOptions(options) {
-  return JSON.parse(JSON.stringify(options));
+  return {
+    ...JSON.parse(JSON.stringify(options)),
+    startDate: options.startDate instanceof Date ? options.startDate.toISOString() : options.startDate,
+  };
 }
 
-function verifyDemoRemount() {
+function addUtcMonths(isoString, monthOffset) {
+  const date = new Date(isoString);
+  date.setUTCMonth(date.getUTCMonth() + monthOffset);
+  return date.toISOString();
+}
+
+function createSerializedDemoMonths(startDate, options) {
+  const baseInventory = options.startingInventory;
+  const monthlyDemand = options.averageMonthlySales;
+  const replenishment = options.costPerOrder;
+  const safetyStock = options.maxMonthlySales + options.maxLeadTime;
+
+  return Array.from({ length: 12 }, (_, index) => {
+    const receipts = index === 0 ? replenishment : 0;
+    const beginningInventory = baseInventory + index * 10;
+    const endingInventory = beginningInventory + receipts - monthlyDemand;
+
+    return {
+      month: addUtcMonths(startDate, index),
+      fulfillment: monthlyDemand + index,
+      beginningInventory,
+      receipts,
+      endingInventory,
+      safetyStock,
+    };
+  });
+}
+
+function createDemoResult(options) {
+  return {
+    eoq: options.annualDemand + options.costPerOrder,
+    safetyStock: options.maxMonthlySales + options.maxLeadTime,
+    months: createSerializedDemoMonths(options.startDate.toISOString(), options).map((month) => ({
+      ...month,
+      month: new Date(month.month),
+    })),
+  };
+}
+
+class FakeClassList {
+  constructor(owner, initial = []) {
+    this.owner = owner;
+    this.tokens = new Set(initial);
+  }
+
+  add(...tokens) {
+    let changed = false;
+
+    tokens.forEach((token) => {
+      if (!this.tokens.has(token)) {
+        this.tokens.add(token);
+        changed = true;
+      }
+    });
+
+    if (changed) {
+      this.owner.notifyAttributeMutation('class');
+    }
+  }
+
+  remove(...tokens) {
+    let changed = false;
+
+    tokens.forEach((token) => {
+      if (this.tokens.delete(token)) {
+        changed = true;
+      }
+    });
+
+    if (changed) {
+      this.owner.notifyAttributeMutation('class');
+    }
+  }
+
+  contains(token) {
+    return this.tokens.has(token);
+  }
+}
+
+class FakeElement {
+  constructor({ id = '', classNames = [] } = {}, mutationObservers) {
+    this.id = id;
+    this.children = [];
+    this.parentElement = null;
+    this.style = new Proxy(
+      {},
+      {
+        set: (target, property, value) => {
+          if (target[property] === value) {
+            return true;
+          }
+
+          target[property] = value;
+          this.notifyAttributeMutation('style');
+          return true;
+        },
+        deleteProperty: (target, property) => {
+          if (!(property in target)) {
+            return true;
+          }
+
+          delete target[property];
+          this.notifyAttributeMutation('style');
+          return true;
+        },
+      },
+    );
+    this._listeners = new Map();
+    this._mutationObservers = mutationObservers;
+    this.classList = new FakeClassList(this, classNames);
+    this._hidden = false;
+  }
+
+  get hidden() {
+    return this._hidden;
+  }
+
+  set hidden(value) {
+    const normalized = Boolean(value);
+
+    if (this._hidden !== normalized) {
+      this._hidden = normalized;
+      this.notifyAttributeMutation('hidden');
+    }
+  }
+
+  addEventListener(type, handler) {
+    this._listeners.set(type, handler);
+  }
+
+  dispatch(type, event = {}) {
+    const listener = this._listeners.get(type);
+
+    if (listener) {
+      listener(event);
+    }
+  }
+
+  appendChild(child) {
+    child.parentElement = this;
+    this.children.push(child);
+    this.notifyChildMutation(child);
+  }
+
+  contains(node) {
+    if (node === this) {
+      return true;
+    }
+
+    return this.children.some((child) => typeof child.contains === 'function' && child.contains(node));
+  }
+
+  querySelector(selector) {
+    if (!selector.startsWith('.')) {
+      return null;
+    }
+
+    const className = selector.slice(1);
+
+    for (const child of this.children) {
+      if (child.classList?.contains(className)) {
+        return child;
+      }
+
+      const nestedMatch =
+        typeof child.querySelector === 'function' ? child.querySelector(selector) : null;
+
+      if (nestedMatch) {
+        return nestedMatch;
+      }
+    }
+
+    return null;
+  }
+
+  querySelectorAll(selector) {
+    if (!selector.startsWith('.')) {
+      return [];
+    }
+
+    const className = selector.slice(1);
+    const matches = [];
+
+    for (const child of this.children) {
+      if (child.classList?.contains(className)) {
+        matches.push(child);
+      }
+
+      if (typeof child.querySelectorAll === 'function') {
+        matches.push(...child.querySelectorAll(selector));
+      }
+    }
+
+    return matches;
+  }
+
+  notifyAttributeMutation(attributeName) {
+    this._mutationObservers.forEach((record) => {
+      if (!record.active || !record.options.attributes) {
+        return;
+      }
+
+      if (
+        record.options.attributeFilter &&
+        !record.options.attributeFilter.includes(attributeName)
+      ) {
+        return;
+      }
+
+      if (record.target === this || (record.options.subtree && record.target.contains(this))) {
+        record.callback([{ type: 'attributes', target: this, attributeName }]);
+      }
+    });
+  }
+
+  notifyChildMutation(addedNode) {
+    this._mutationObservers.forEach((record) => {
+      if (!record.active || !record.options.childList) {
+        return;
+      }
+
+      if (record.target === this || (record.options.subtree && record.target.contains(this))) {
+        record.callback([{ type: 'childList', target: this, addedNodes: [addedNode] }]);
+      }
+    });
+  }
+}
+
+class FakeFormElement extends FakeElement {
+  constructor(options, mutationObservers) {
+    super(options, mutationObservers);
+    this.elements = {
+      namedItem: (name) => this.children.find((child) => child.name === name) ?? null,
+    };
+  }
+}
+
+function createDemoHarness({ savedValue } = {}) {
   const demoHtml = fs.readFileSync(path.join(repoRoot, 'demo.html'), 'utf8');
   const inlineScript = extractInlineDemoScript(demoHtml);
   const controls = new Map(
@@ -394,10 +689,15 @@ function verifyDemoRemount() {
       createDemoInput({ name, value, defaultValue: value }),
     ]),
   );
-  const listeners = new Map();
   const mountCalls = [];
   const destroyedHandles = [];
   let nextHandleId = 0;
+  const storage = new Map();
+  const mutationObservers = [];
+
+  if (savedValue !== undefined) {
+    storage.set('imsCalcResults:v1', savedValue);
+  }
 
   const controlsForm = {
     elements: {
@@ -405,49 +705,251 @@ function verifyDemoRemount() {
         return controls.get(name) ?? null;
       },
     },
-    addEventListener(type, handler) {
-      listeners.set(type, handler);
-    },
   };
+  const calculateButton = new FakeElement({ id: 'inventory-calculate' }, mutationObservers);
+  const resultsFrame = new FakeElement({ id: 'inventory-results' }, mutationObservers);
+  const modalElement = new FakeElement({ classNames: ['calc_modal'] }, mutationObservers);
+  const modalCard = new FakeElement({ classNames: ['calc_modal-card'] }, mutationObservers);
+  const unlockForm = new FakeFormElement({ id: 'calc-unlock-form' }, mutationObservers);
+  const unlockEmailInput = createDemoInput({
+    name: 'email',
+    value: '',
+    defaultValue: '',
+  });
+  const successElement = new FakeElement({ classNames: ['w-form-done'] }, mutationObservers);
+  successElement.style.display = 'none';
+  modalElement.appendChild(modalCard);
+  modalCard.appendChild(unlockForm);
+  unlockForm.appendChild(unlockEmailInput);
+  modalCard.appendChild(successElement);
 
   const documentStub = {
     getElementById(id) {
-      assert.equal(id, 'inventory-controls', 'Demo script queried an unexpected element id.');
-      return controlsForm;
+      if (id === 'inventory-controls') {
+        return controlsForm;
+      }
+
+      if (id === 'inventory-calculate') {
+        return calculateButton;
+      }
+
+      if (id === 'inventory-results') {
+        return resultsFrame;
+      }
+
+      if (id === 'calc-unlock-form') {
+        return unlockForm;
+      }
+      throw new Error(`Demo script queried an unexpected element id: ${id}`);
+    },
+    querySelector(selector) {
+      assert.equal(selector, '.calc_modal', 'Demo script queried an unexpected selector.');
+      return modalElement;
     },
   };
 
   const InventoryGraph = {
     mount(selector, options) {
+      assert.equal(
+        resultsFrame.hidden,
+        false,
+        'Demo must reveal #inventory-results before InventoryGraph.mount runs.',
+      );
       mountCalls.push({ selector, options });
       const handleId = nextHandleId;
       nextHandleId += 1;
 
       return {
+        canvas: { id: handleId },
+        redraw() {},
         destroy() {
           destroyedHandles.push(handleId);
         },
+        result: createDemoResult(options),
       };
     },
   };
 
+  class MutationObserver {
+    constructor(callback) {
+      this.callback = callback;
+      this.record = null;
+    }
+
+    observe(target, options) {
+      this.record = {
+        callback: this.callback,
+        target,
+        options,
+        active: true,
+      };
+      mutationObservers.push(this.record);
+    }
+
+    disconnect() {
+      if (this.record) {
+        this.record.active = false;
+      }
+    }
+  }
+
+  const windowStub = {
+    localStorage: {
+      getItem(key) {
+        return storage.has(key) ? storage.get(key) : null;
+      },
+      setItem(key, value) {
+        storage.set(key, value);
+      },
+    },
+    getComputedStyle(element) {
+      return {
+        display: element.style.display || 'block',
+        visibility: element.style.visibility || 'visible',
+        opacity: element.style.opacity || '1',
+      };
+    },
+  };
+  windowStub.window = windowStub;
+
   const context = vm.createContext({
     document: documentStub,
     InventoryGraph,
+    MutationObserver,
     Number,
+    Date,
+    JSON,
+    window: windowStub,
   });
 
   vm.runInContext(inlineScript, context, { filename: 'demo-inline-script.js' });
 
-  assert.equal(listeners.has('input'), true, 'Demo controls did not register an input listener.');
-  assert.equal(mountCalls.length, 1, 'Demo script should mount the graph on initial load.');
+  return {
+    calculateButton,
+    controls,
+    destroyedHandles,
+    modalCard,
+    modalElement,
+    mountCalls,
+    mutationObservers,
+    resultsFrame,
+    storage,
+    unlockEmailInput,
+    unlockForm,
+    successElement,
+  };
+}
+
+function verifyDemoFlow() {
+  const lockedHarness = createDemoHarness();
+
   assert.equal(
-    mountCalls[0].selector,
-    '#inventory-graph',
-    'Demo initial mount should target #inventory-graph.',
+    lockedHarness.mountCalls.length,
+    0,
+    'With empty localStorage, the demo must not mount the graph on initial load.',
+  );
+  assert.equal(
+    lockedHarness.resultsFrame.hidden,
+    true,
+    'With empty localStorage, results should stay hidden on initial load.',
+  );
+
+  lockedHarness.calculateButton.dispatch('click');
+
+  assert.equal(
+    lockedHarness.modalElement.classList.contains('show'),
+    true,
+    'Locked Calculate should open .calc_modal by adding .show.',
+  );
+  assert.equal(
+    lockedHarness.mountCalls.length,
+    0,
+    'Locked Calculate must not mount results before modal success.',
+  );
+
+  const modalObserver = lockedHarness.mutationObservers.find((record) => record.active);
+  assert.ok(modalObserver, 'Locked Calculate should attach a MutationObserver to .calc_modal.');
+  assert.equal(modalObserver.target, lockedHarness.modalElement, 'MutationObserver should watch .calc_modal.');
+  assert.equal(modalObserver.options.childList, true, 'MutationObserver should watch childList changes.');
+  assert.equal(modalObserver.options.subtree, true, 'MutationObserver should watch subtree changes.');
+  assert.equal(modalObserver.options.attributes, true, 'MutationObserver should watch attribute changes.');
+  assert.deepEqual(
+    Array.from(modalObserver.options.attributeFilter),
+    ['class', 'style'],
+    'MutationObserver should watch class/style changes.',
+  );
+
+  lockedHarness.controls.get('annualDemand').value = '8100';
+  lockedHarness.controls.get('averageMonthlySales').value = '321';
+  lockedHarness.unlockForm.dispatch('submit', {
+    preventDefault() {},
+  });
+
+  assert.equal(
+    lockedHarness.mountCalls.length,
+    0,
+    'Submitting the Webflow form alone must not unlock before .w-form-done becomes visible.',
+  );
+  assert.equal(
+    lockedHarness.successElement.style.display,
+    'none',
+    'Submitting the Webflow form alone must not reveal .w-form-done.',
+  );
+
+  lockedHarness.successElement.style.display = 'block';
+
+  assert.equal(
+    lockedHarness.mountCalls.length,
+    1,
+    'Making the existing .w-form-done visible should unlock the graph.',
+  );
+  assert.equal(
+    lockedHarness.resultsFrame.hidden,
+    false,
+    'Visible Webflow success should reveal the results frame.',
+  );
+  assert.equal(
+    lockedHarness.modalElement.classList.contains('show'),
+    true,
+    'Modal success should leave .calc_modal.show in place.',
+  );
+  assert.equal(
+    lockedHarness.successElement.style.display,
+    'block',
+    'Visible Webflow success should reveal .w-form-done.',
+  );
+
+  const firstMountOptions = normalizeDemoOptions(lockedHarness.mountCalls[0].options);
+  assert.equal(
+    typeof lockedHarness.mountCalls[0].options.startDate?.toISOString,
+    'function',
+    'New calculations should pass an explicit Date startDate into InventoryGraph.mount.',
   );
   assert.deepEqual(
-    normalizeDemoOptions(mountCalls[0].options),
+    firstMountOptions,
+    {
+      startingInventory: 2000,
+      annualDemand: 7000,
+      costPerOrder: 500,
+      holdingCostPerUnit: 2.5,
+      maxMonthlySales: 450,
+      maxLeadTime: 4,
+      averageMonthlySales: 250,
+      averageLeadTime: 2,
+      startDate: firstMountOptions.startDate,
+    },
+    'Modal unlock must use the pending Calculate snapshot, not later input edits.',
+  );
+
+  const savedAfterUnlock = JSON.parse(lockedHarness.storage.get('imsCalcResults:v1'));
+  assert.equal(savedAfterUnlock.version, 1, 'Unlock should persist versioned localStorage access data.');
+  assert.equal(
+    savedAfterUnlock.startDate,
+    firstMountOptions.startDate,
+    'Unlock should persist the same startDate passed into InventoryGraph.mount.',
+  );
+  assert.deepEqual(
+    savedAfterUnlock.inputs,
     {
       startingInventory: 2000,
       annualDemand: 7000,
@@ -458,36 +960,287 @@ function verifyDemoRemount() {
       averageMonthlySales: 250,
       averageLeadTime: 2,
     },
-    'Demo initial mount should use the static default input values.',
+    'Unlock should persist the pending Calculate input snapshot.',
   );
-
-  controls.get('annualDemand').value = '';
-  controls.get('holdingCostPerUnit').value = '0';
-  controls.get('maxLeadTime').value = '-5';
-  controls.get('averageMonthlySales').value = '300';
-
-  listeners.get('input')();
-
-  assert.equal(mountCalls.length, 2, 'Demo input changes should remount the graph.');
-  assert.deepEqual(destroyedHandles, [0], 'Demo remount should destroy the previous chart handle.');
   assert.equal(
-    mountCalls[1].selector,
-    '#inventory-graph',
-    'Demo remount should target #inventory-graph.',
+    savedAfterUnlock.results.months[0].month,
+    firstMountOptions.startDate,
+    'Unlock should serialize result month dates as ISO strings.',
   );
-  assert.deepEqual(
-    normalizeDemoOptions(mountCalls[1].options),
-    {
-      startingInventory: 2000,
-      annualDemand: 7000,
-      costPerOrder: 500,
-      holdingCostPerUnit: 2.5,
-      maxMonthlySales: 450,
-      maxLeadTime: 4,
-      averageMonthlySales: 300,
+
+  const restoredStartDate = '2026-06-01T00:00:00.000Z';
+  const restoredState = JSON.stringify({
+    version: 1,
+    savedAt: '2026-06-17T00:00:00.000Z',
+    startDate: restoredStartDate,
+    inputs: {
+      startingInventory: 900,
+      annualDemand: 1200,
+      costPerOrder: 75,
+      holdingCostPerUnit: 3,
+      maxMonthlySales: 90,
+      maxLeadTime: 5,
+      averageMonthlySales: 70,
       averageLeadTime: 2,
     },
-    'Demo remount should fall back to static defaults for invalid values.',
+    results: {
+      eoq: 1275,
+      safetyStock: 95,
+      months: createSerializedDemoMonths(restoredStartDate, {
+        startingInventory: 900,
+        annualDemand: 1200,
+        costPerOrder: 75,
+        holdingCostPerUnit: 3,
+        maxMonthlySales: 90,
+        maxLeadTime: 5,
+        averageMonthlySales: 70,
+        averageLeadTime: 2,
+      }),
+    },
+  });
+  const restoredHarness = createDemoHarness({ savedValue: restoredState });
+
+  assert.equal(
+    restoredHarness.mountCalls.length,
+    1,
+    'Valid saved localStorage should mount the graph immediately on load.',
+  );
+  assert.equal(
+    restoredHarness.resultsFrame.hidden,
+    false,
+    'Valid saved localStorage should reveal results immediately on load.',
+  );
+  assert.equal(
+    restoredHarness.controls.get('startingInventory').value,
+    '900',
+    'Valid saved localStorage should restore input values before showing results.',
+  );
+  assert.deepEqual(
+    normalizeDemoOptions(restoredHarness.mountCalls[0].options),
+    {
+      startingInventory: 900,
+      annualDemand: 1200,
+      costPerOrder: 75,
+      holdingCostPerUnit: 3,
+      maxMonthlySales: 90,
+      maxLeadTime: 5,
+      averageMonthlySales: 70,
+      averageLeadTime: 2,
+      startDate: restoredStartDate,
+    },
+    'Restored mount should reuse the saved startDate and inputs.',
+  );
+
+  restoredHarness.controls.get('startingInventory').value = '1111';
+  restoredHarness.controls.get('annualDemand').value = '2222';
+  restoredHarness.calculateButton.dispatch('click');
+
+  assert.equal(
+    restoredHarness.modalElement.classList.contains('show'),
+    false,
+    'Returning users with saved access must not reopen .calc_modal on Calculate.',
+  );
+  assert.equal(
+    restoredHarness.mountCalls.length,
+    2,
+    'Returning users should recalculate immediately on Calculate.',
+  );
+  assert.deepEqual(
+    restoredHarness.destroyedHandles,
+    [0],
+    'Recalculation should destroy the previous chart handle before remounting.',
+  );
+
+  const savedAfterRecalc = JSON.parse(restoredHarness.storage.get('imsCalcResults:v1'));
+  const recalculatedOptions = normalizeDemoOptions(restoredHarness.mountCalls[1].options);
+  assert.equal(
+    savedAfterRecalc.startDate,
+    recalculatedOptions.startDate,
+    'Recalculation should persist the same explicit startDate used for the remount.',
+  );
+  assert.equal(savedAfterRecalc.inputs.startingInventory, 1111, 'Recalculation should persist updated input values.');
+  assert.equal(savedAfterRecalc.inputs.annualDemand, 2222, 'Recalculation should persist current Annual Demand.');
+
+  const malformedHarness = createDemoHarness({ savedValue: '{"version":' });
+  assert.equal(
+    malformedHarness.mountCalls.length,
+    0,
+    'Malformed localStorage data should be treated as no saved access.',
+  );
+
+  const wrongVersionHarness = createDemoHarness({
+    savedValue: JSON.stringify({ version: 2 }),
+  });
+  assert.equal(
+    wrongVersionHarness.mountCalls.length,
+    0,
+    'Wrong-version localStorage data should be treated as no saved access.',
+  );
+
+  const multipleSuccessHarness = createDemoHarness();
+  multipleSuccessHarness.calculateButton.dispatch('click');
+  const appendedSuccessElement = new FakeElement({ classNames: ['w-form-done'] }, multipleSuccessHarness.mutationObservers);
+  appendedSuccessElement.style.display = 'block';
+  multipleSuccessHarness.modalCard.appendChild(appendedSuccessElement);
+  assert.equal(
+    multipleSuccessHarness.mountCalls.length,
+    1,
+    'A later visible .w-form-done should unlock even when an earlier placeholder remains hidden.',
+  );
+
+  const nonIsoSavedAtHarness = createDemoHarness({
+    savedValue: JSON.stringify({
+      version: 1,
+      savedAt: '2026-06-17',
+      startDate: restoredStartDate,
+      inputs: {
+        startingInventory: 900,
+        annualDemand: 1200,
+        costPerOrder: 75,
+        holdingCostPerUnit: 3,
+        maxMonthlySales: 90,
+        maxLeadTime: 5,
+        averageMonthlySales: 70,
+        averageLeadTime: 2,
+      },
+      results: {
+        eoq: 1275,
+        safetyStock: 95,
+        months: createSerializedDemoMonths(restoredStartDate, {
+          startingInventory: 900,
+          annualDemand: 1200,
+          costPerOrder: 75,
+          holdingCostPerUnit: 3,
+          maxMonthlySales: 90,
+          maxLeadTime: 5,
+          averageMonthlySales: 70,
+          averageLeadTime: 2,
+        }),
+      },
+    }),
+  });
+  assert.equal(
+    nonIsoSavedAtHarness.mountCalls.length,
+    0,
+    'Saved localStorage data with a non-ISO savedAt should be treated as no saved access.',
+  );
+
+  const nonIsoStartDateHarness = createDemoHarness({
+    savedValue: JSON.stringify({
+      version: 1,
+      savedAt: '2026-06-17T00:00:00.000Z',
+      startDate: '2026-06-01',
+      inputs: {
+        startingInventory: 900,
+        annualDemand: 1200,
+        costPerOrder: 75,
+        holdingCostPerUnit: 3,
+        maxMonthlySales: 90,
+        maxLeadTime: 5,
+        averageMonthlySales: 70,
+        averageLeadTime: 2,
+      },
+      results: {
+        eoq: 1275,
+        safetyStock: 95,
+        months: createSerializedDemoMonths(restoredStartDate, {
+          startingInventory: 900,
+          annualDemand: 1200,
+          costPerOrder: 75,
+          holdingCostPerUnit: 3,
+          maxMonthlySales: 90,
+          maxLeadTime: 5,
+          averageMonthlySales: 70,
+          averageLeadTime: 2,
+        }),
+      },
+    }),
+  });
+  assert.equal(
+    nonIsoStartDateHarness.mountCalls.length,
+    0,
+    'Saved localStorage data with a non-ISO startDate should be treated as no saved access.',
+  );
+
+  const incompleteResultsHarness = createDemoHarness({
+    savedValue: JSON.stringify({
+      version: 1,
+      savedAt: '2026-06-17T00:00:00.000Z',
+      startDate: restoredStartDate,
+      inputs: {
+        startingInventory: 900,
+        annualDemand: 1200,
+        costPerOrder: 75,
+        holdingCostPerUnit: 3,
+        maxMonthlySales: 90,
+        maxLeadTime: 5,
+        averageMonthlySales: 70,
+        averageLeadTime: 2,
+      },
+      results: {
+        eoq: 1275,
+        safetyStock: 95,
+        months: createSerializedDemoMonths(restoredStartDate, {
+          startingInventory: 900,
+          annualDemand: 1200,
+          costPerOrder: 75,
+          holdingCostPerUnit: 3,
+          maxMonthlySales: 90,
+          maxLeadTime: 5,
+          averageMonthlySales: 70,
+          averageLeadTime: 2,
+        }).slice(0, 1),
+      },
+    }),
+  });
+  assert.equal(
+    incompleteResultsHarness.mountCalls.length,
+    0,
+    'Saved localStorage data with fewer than 12 months should be treated as no saved access.',
+  );
+
+  const nonIsoMonthHarness = createDemoHarness({
+    savedValue: JSON.stringify({
+      version: 1,
+      savedAt: '2026-06-17T00:00:00.000Z',
+      startDate: restoredStartDate,
+      inputs: {
+        startingInventory: 900,
+        annualDemand: 1200,
+        costPerOrder: 75,
+        holdingCostPerUnit: 3,
+        maxMonthlySales: 90,
+        maxLeadTime: 5,
+        averageMonthlySales: 70,
+        averageLeadTime: 2,
+      },
+      results: {
+        eoq: 1275,
+        safetyStock: 95,
+        months: createSerializedDemoMonths(restoredStartDate, {
+          startingInventory: 900,
+          annualDemand: 1200,
+          costPerOrder: 75,
+          holdingCostPerUnit: 3,
+          maxMonthlySales: 90,
+          maxLeadTime: 5,
+          averageMonthlySales: 70,
+          averageLeadTime: 2,
+        }).map((month, index) =>
+          index === 0
+            ? {
+                ...month,
+                month: '2026-06-01',
+              }
+            : month,
+        ),
+      },
+    }),
+  });
+  assert.equal(
+    nonIsoMonthHarness.mountCalls.length,
+    0,
+    'Saved localStorage data with non-ISO month strings should be treated as no saved access.',
   );
 }
 
@@ -745,6 +1498,7 @@ function verifyBundleSmoke() {
   assert.equal(container.children[0], handle.canvas, 'Mount attached an unexpected child to the container.');
   assert.equal(handle.canvas.parentElement, container, 'Created canvas was not parented to the container.');
   assert.equal(handle.canvas.style.width, '100%', 'Owned canvas did not receive responsive width styling.');
+  assert.equal(typeof handle.result?.eoq, 'number', 'Mount handle is missing the calculated result.');
   assert.equal(typeof handle.redraw, 'function', 'Mount handle is missing redraw().');
   assert.equal(typeof handle.destroy, 'function', 'Mount handle is missing destroy().');
   assert.equal(
@@ -863,7 +1617,7 @@ async function main() {
   runBuild();
   verifyBundleSmoke();
   verifyDemoHtml();
-  verifyDemoRemount();
+  verifyDemoFlow();
 
   const summary = {
     verifiedAt: new Date().toISOString(),
@@ -872,7 +1626,7 @@ async function main() {
     buildOutput: 'dist/inventory-graph.min.js',
     demoHtmlChecked: true,
     bundleSmokeChecked: true,
-    demoRemountChecked: true,
+    demoFlowChecked: true,
   };
 
   ensureArtifactDirectory();
