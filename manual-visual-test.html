@@ -1,0 +1,318 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Inventory Graph Manual Visual Test</title>
+    <style>
+      :root {
+        font-family: sans-serif;
+        color: #111827;
+        background: #eef2f7;
+      }
+
+      body {
+        margin: 0;
+        padding: 24px;
+      }
+
+      main {
+        max-width: 1100px;
+        margin: 0 auto;
+        display: grid;
+        gap: 18px;
+      }
+
+      .panel {
+        background: #ffffff;
+        border: 1px solid #d1d5db;
+        border-radius: 12px;
+        padding: 16px;
+      }
+
+      .controls {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        gap: 12px;
+      }
+
+      label {
+        display: grid;
+        gap: 6px;
+        font-size: 13px;
+        font-weight: 700;
+      }
+
+      input {
+        padding: 9px 10px;
+        border: 1px solid #cbd5e1;
+        border-radius: 8px;
+        font: inherit;
+      }
+
+      button {
+        justify-self: start;
+        border: 0;
+        border-radius: 999px;
+        padding: 11px 18px;
+        background: #2563eb;
+        color: #ffffff;
+        font: inherit;
+        font-weight: 700;
+        cursor: pointer;
+      }
+
+      #inventory-graph {
+        min-height: 360px;
+      }
+
+      .summary {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        gap: 12px;
+      }
+
+      .summary-card {
+        border: 1px solid #dbe3f0;
+        border-radius: 10px;
+        padding: 12px;
+        background: #f8fafc;
+      }
+
+      .summary-card strong {
+        display: block;
+        margin-top: 4px;
+        font-size: 22px;
+      }
+
+      .order-timing-card {
+        display: grid;
+        gap: 10px;
+      }
+
+      .order-timing-card strong {
+        margin-top: 0;
+      }
+
+      .order-list {
+        display: grid;
+        gap: 10px;
+      }
+
+      .order-row {
+        display: grid;
+        grid-template-columns: minmax(0, auto) minmax(0, 1fr);
+        gap: 12px;
+        align-items: center;
+        padding: 10px 12px;
+        border: 1px solid #dbe3f0;
+        border-radius: 10px;
+        background: #ffffff;
+      }
+
+      .order-month {
+        font-weight: 700;
+        white-space: nowrap;
+      }
+
+      .order-action {
+        color: #374151;
+      }
+
+      .order-empty {
+        color: #4b5563;
+      }
+
+      @media (max-width: 640px) {
+        .order-row {
+          grid-template-columns: 1fr;
+          gap: 4px;
+        }
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 14px;
+      }
+
+      th,
+      td {
+        padding: 9px 10px;
+        border-bottom: 1px solid #e5e7eb;
+        text-align: left;
+        white-space: nowrap;
+      }
+
+      th {
+        color: #4b5563;
+        font-size: 12px;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+      }
+
+      .table-scroll {
+        overflow-x: auto;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Inventory Graph Manual Visual Test</h1>
+
+      <section class="panel">
+        <div class="controls">
+          <label>Start Date <input id="startDate" type="date" value="2026-06-01" /></label>
+          <label>Starting Inventory <input id="startingInventory" type="number" value="2000" /></label>
+          <label>Annual Demand <input id="annualDemand" type="number" value="7000" /></label>
+          <label>Cost Per Order <input id="costPerOrder" type="number" value="500" /></label>
+          <label>Holding Cost Per Unit <input id="holdingCostPerUnit" type="number" value="2.5" step="0.01" /></label>
+          <label>Max Monthly Sales <input id="maxMonthlySales" type="number" value="450" /></label>
+          <label>Max Lead Time <input id="maxLeadTime" type="number" value="4" /></label>
+          <label>Average Monthly Sales <input id="averageMonthlySales" type="number" value="250" /></label>
+          <label>Average Lead Time <input id="averageLeadTime" type="number" value="2" /></label>
+        </div>
+        <p><button id="calculate" type="button">Calculate</button></p>
+      </section>
+
+      <section class="panel">
+        <div id="inventory-graph"></div>
+      </section>
+
+      <section class="panel summary" aria-label="Calculated summary">
+        <div class="summary-card">EOQ<strong id="eoq">-</strong></div>
+        <div class="summary-card">Safety Stock<strong id="safetyStock">-</strong></div>
+        <div class="summary-card order-timing-card">
+          <span>When To Order</span>
+          <p class="order-empty" id="orderTiming">No projected orders.</p>
+          <div class="order-list" id="orderList" hidden></div>
+        </div>
+      </section>
+
+      <section class="panel table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>Month</th>
+              <th>Demand</th>
+              <th>Beginning Inv</th>
+              <th>Receipts</th>
+              <th>Ending Inv</th>
+              <th>Safety Stock</th>
+            </tr>
+          </thead>
+          <tbody id="projectionRows"></tbody>
+        </table>
+      </section>
+    </main>
+
+    <script src="./dist/inventory-graph.min.js"></script>
+    <script>
+      const numberFields = [
+        "startingInventory",
+        "annualDemand",
+        "costPerOrder",
+        "holdingCostPerUnit",
+        "maxMonthlySales",
+        "maxLeadTime",
+        "averageMonthlySales",
+        "averageLeadTime"
+      ];
+      let handle;
+
+      function formatUnits(value) {
+        return value.toLocaleString("en-US") + " units";
+      }
+
+      function formatMonth(date) {
+        return date.toLocaleDateString("en-US", { month: "short", year: "numeric" });
+      }
+
+      function readOptions() {
+        const startDateValue = document.getElementById("startDate").value;
+        const options = {
+          startDate: startDateValue ? new Date(startDateValue + "T00:00:00") : new Date()
+        };
+
+        numberFields.forEach((name) => {
+          options[name] = Number.parseFloat(document.getElementById(name).value);
+        });
+
+        return options;
+      }
+
+      function renderTable(months) {
+        const rows = document.getElementById("projectionRows");
+        rows.replaceChildren();
+
+        months.forEach((month) => {
+          const row = document.createElement("tr");
+          [
+            formatMonth(month.month),
+            formatUnits(month.fulfillment),
+            formatUnits(month.beginningInventory),
+            formatUnits(month.receipts),
+            formatUnits(month.endingInventory),
+            formatUnits(month.safetyStock)
+          ].forEach((value) => {
+            const cell = document.createElement("td");
+            cell.textContent = value;
+            row.appendChild(cell);
+          });
+          rows.appendChild(row);
+        });
+      }
+
+      function calculate() {
+        if (handle) {
+          handle.destroy();
+        }
+
+        const options = readOptions();
+        handle = InventoryGraph.mount("#inventory-graph", options);
+        const result = handle.result;
+        const orderTiming = document.getElementById("orderTiming");
+        const orderList = document.getElementById("orderList");
+        const orderMonths = result.months
+          .filter((month) => month.receipts > 0)
+          .map((month) => ({
+            month: formatMonth(month.month),
+            action: "Order " + formatUnits(month.receipts)
+          }));
+
+        document.getElementById("eoq").textContent = formatUnits(result.eoq);
+        document.getElementById("safetyStock").textContent = formatUnits(result.safetyStock);
+
+        orderTiming.hidden = orderMonths.length > 0;
+        orderList.hidden = orderMonths.length === 0;
+        orderList.replaceChildren();
+
+        if (orderMonths.length === 0) {
+          orderTiming.textContent = "No projected orders.";
+        } else {
+          orderMonths.forEach((orderMonth) => {
+            const row = document.createElement("div");
+            const month = document.createElement("span");
+            const action = document.createElement("span");
+
+            row.className = "order-row";
+            month.className = "order-month";
+            action.className = "order-action";
+
+            month.textContent = orderMonth.month;
+            action.textContent = orderMonth.action;
+
+            row.appendChild(month);
+            row.appendChild(action);
+            orderList.appendChild(row);
+          });
+        }
+
+        renderTable(result.months);
+      }
+
+      document.getElementById("calculate").addEventListener("click", calculate);
+      calculate();
+    </script>
+  </body>
+</html>

@@ -104,6 +104,123 @@
         min-height: 360px;
       }
 
+      .results-layout {
+        display: grid;
+        gap: 20px;
+      }
+
+      .results-summary {
+        display: grid;
+        gap: 16px;
+      }
+
+      .results-summary-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        gap: 12px;
+      }
+
+      .summary-card {
+        border: 1px solid #dbe3f0;
+        border-radius: 12px;
+        padding: 14px;
+        background: #f8fafc;
+      }
+
+      .summary-card h2,
+      .results-order-timing h2,
+      .results-table-wrapper h2 {
+        margin: 0 0 8px;
+        font-size: 15px;
+      }
+
+      .summary-card p,
+      .results-order-timing p {
+        margin: 0;
+      }
+
+      .summary-value {
+        display: block;
+        font-size: 24px;
+        font-weight: 700;
+        line-height: 1.2;
+      }
+
+      .summary-caption {
+        display: block;
+        margin-top: 4px;
+        font-size: 13px;
+        color: #4b5563;
+      }
+
+      .results-order-timing {
+        border: 1px solid #dbe3f0;
+        border-radius: 12px;
+        padding: 14px;
+        background: #f8fafc;
+      }
+
+      .results-order-list {
+        display: grid;
+        gap: 10px;
+      }
+
+      .results-order-row {
+        display: grid;
+        grid-template-columns: minmax(0, auto) minmax(0, 1fr);
+        gap: 12px;
+        align-items: center;
+        padding: 10px 12px;
+        border: 1px solid #dbe3f0;
+        border-radius: 10px;
+        background: #ffffff;
+      }
+
+      .results-order-month {
+        font-weight: 700;
+        white-space: nowrap;
+      }
+
+      .results-order-action {
+        color: #374151;
+      }
+
+      .results-order-empty {
+        color: #4b5563;
+      }
+
+      @media (max-width: 640px) {
+        .results-order-row {
+          grid-template-columns: 1fr;
+          gap: 4px;
+        }
+      }
+
+      .results-table-wrapper {
+        overflow-x: auto;
+      }
+
+      .results-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 14px;
+      }
+
+      .results-table th,
+      .results-table td {
+        padding: 10px 12px;
+        border-bottom: 1px solid #e5e7eb;
+        text-align: left;
+        white-space: nowrap;
+      }
+
+      .results-table th {
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: #4b5563;
+      }
+
       .graph-frame[hidden] {
         display: none;
       }
@@ -224,7 +341,201 @@
           </div>
         </fieldset>
         <div class="graph-frame" id="inventory-results" hidden>
-          <div id="inventory-graph"></div>
+          <div class="results-layout">
+            <div id="inventory-graph"></div>
+            <section class="results-summary" aria-label="Inventory results summary">
+              <div class="results-summary-grid">
+                <article class="summary-card">
+                  <h2>Annual Demand</h2>
+                  <p>
+                    <span class="summary-value" id="inventory-results-annual-demand">0 units</span>
+                    <span class="summary-caption">Demand input spread across the seasonality curve.</span>
+                  </p>
+                </article>
+                <article class="summary-card">
+                  <h2>Efficient Order Quantity</h2>
+                  <p>
+                    <span class="summary-value" id="inventory-results-eoq">0 units</span>
+                    <span class="summary-caption">How much to order when inventory drops below safety stock.</span>
+                  </p>
+                </article>
+                <article class="summary-card">
+                  <h2>Safety Stock</h2>
+                  <p>
+                    <span class="summary-value" id="inventory-results-safety-stock">0 units</span>
+                    <span class="summary-caption">Inventory threshold shown on the chart and in the table.</span>
+                  </p>
+                </article>
+              </div>
+              <section class="results-order-timing" aria-label="Recommended order timing">
+                <h2>When To Order</h2>
+                <p class="results-order-empty" id="inventory-results-order-timing">No projected orders.</p>
+                <div class="results-order-list" id="inventory-results-order-list" hidden>
+                  <div class="results-order-row" hidden>
+                    <span class="results-order-month"></span>
+                    <span class="results-order-action"></span>
+                  </div>
+                  <div class="results-order-row" hidden>
+                    <span class="results-order-month"></span>
+                    <span class="results-order-action"></span>
+                  </div>
+                  <div class="results-order-row" hidden>
+                    <span class="results-order-month"></span>
+                    <span class="results-order-action"></span>
+                  </div>
+                  <div class="results-order-row" hidden>
+                    <span class="results-order-month"></span>
+                    <span class="results-order-action"></span>
+                  </div>
+                  <div class="results-order-row" hidden>
+                    <span class="results-order-month"></span>
+                    <span class="results-order-action"></span>
+                  </div>
+                  <div class="results-order-row" hidden>
+                    <span class="results-order-month"></span>
+                    <span class="results-order-action"></span>
+                  </div>
+                  <div class="results-order-row" hidden>
+                    <span class="results-order-month"></span>
+                    <span class="results-order-action"></span>
+                  </div>
+                  <div class="results-order-row" hidden>
+                    <span class="results-order-month"></span>
+                    <span class="results-order-action"></span>
+                  </div>
+                  <div class="results-order-row" hidden>
+                    <span class="results-order-month"></span>
+                    <span class="results-order-action"></span>
+                  </div>
+                  <div class="results-order-row" hidden>
+                    <span class="results-order-month"></span>
+                    <span class="results-order-action"></span>
+                  </div>
+                  <div class="results-order-row" hidden>
+                    <span class="results-order-month"></span>
+                    <span class="results-order-action"></span>
+                  </div>
+                  <div class="results-order-row" hidden>
+                    <span class="results-order-month"></span>
+                    <span class="results-order-action"></span>
+                  </div>
+                </div>
+              </section>
+            </section>
+            <section class="results-table-wrapper" aria-label="Projected monthly inventory table">
+              <h2>12-Month Projection</h2>
+              <table class="results-table">
+                <thead>
+                  <tr>
+                    <th scope="col">Month</th>
+                    <th scope="col">Projected Demand</th>
+                    <th scope="col">Beginning Inventory</th>
+                    <th scope="col">Order / Receipts</th>
+                    <th scope="col">Ending Inventory</th>
+                    <th scope="col">Safety Stock</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr class="inventory-results-row">
+                    <td class="inventory-results-month"></td>
+                    <td class="inventory-results-demand"></td>
+                    <td class="inventory-results-beginning"></td>
+                    <td class="inventory-results-receipts"></td>
+                    <td class="inventory-results-ending"></td>
+                    <td class="inventory-results-safety"></td>
+                  </tr>
+                  <tr class="inventory-results-row">
+                    <td class="inventory-results-month"></td>
+                    <td class="inventory-results-demand"></td>
+                    <td class="inventory-results-beginning"></td>
+                    <td class="inventory-results-receipts"></td>
+                    <td class="inventory-results-ending"></td>
+                    <td class="inventory-results-safety"></td>
+                  </tr>
+                  <tr class="inventory-results-row">
+                    <td class="inventory-results-month"></td>
+                    <td class="inventory-results-demand"></td>
+                    <td class="inventory-results-beginning"></td>
+                    <td class="inventory-results-receipts"></td>
+                    <td class="inventory-results-ending"></td>
+                    <td class="inventory-results-safety"></td>
+                  </tr>
+                  <tr class="inventory-results-row">
+                    <td class="inventory-results-month"></td>
+                    <td class="inventory-results-demand"></td>
+                    <td class="inventory-results-beginning"></td>
+                    <td class="inventory-results-receipts"></td>
+                    <td class="inventory-results-ending"></td>
+                    <td class="inventory-results-safety"></td>
+                  </tr>
+                  <tr class="inventory-results-row">
+                    <td class="inventory-results-month"></td>
+                    <td class="inventory-results-demand"></td>
+                    <td class="inventory-results-beginning"></td>
+                    <td class="inventory-results-receipts"></td>
+                    <td class="inventory-results-ending"></td>
+                    <td class="inventory-results-safety"></td>
+                  </tr>
+                  <tr class="inventory-results-row">
+                    <td class="inventory-results-month"></td>
+                    <td class="inventory-results-demand"></td>
+                    <td class="inventory-results-beginning"></td>
+                    <td class="inventory-results-receipts"></td>
+                    <td class="inventory-results-ending"></td>
+                    <td class="inventory-results-safety"></td>
+                  </tr>
+                  <tr class="inventory-results-row">
+                    <td class="inventory-results-month"></td>
+                    <td class="inventory-results-demand"></td>
+                    <td class="inventory-results-beginning"></td>
+                    <td class="inventory-results-receipts"></td>
+                    <td class="inventory-results-ending"></td>
+                    <td class="inventory-results-safety"></td>
+                  </tr>
+                  <tr class="inventory-results-row">
+                    <td class="inventory-results-month"></td>
+                    <td class="inventory-results-demand"></td>
+                    <td class="inventory-results-beginning"></td>
+                    <td class="inventory-results-receipts"></td>
+                    <td class="inventory-results-ending"></td>
+                    <td class="inventory-results-safety"></td>
+                  </tr>
+                  <tr class="inventory-results-row">
+                    <td class="inventory-results-month"></td>
+                    <td class="inventory-results-demand"></td>
+                    <td class="inventory-results-beginning"></td>
+                    <td class="inventory-results-receipts"></td>
+                    <td class="inventory-results-ending"></td>
+                    <td class="inventory-results-safety"></td>
+                  </tr>
+                  <tr class="inventory-results-row">
+                    <td class="inventory-results-month"></td>
+                    <td class="inventory-results-demand"></td>
+                    <td class="inventory-results-beginning"></td>
+                    <td class="inventory-results-receipts"></td>
+                    <td class="inventory-results-ending"></td>
+                    <td class="inventory-results-safety"></td>
+                  </tr>
+                  <tr class="inventory-results-row">
+                    <td class="inventory-results-month"></td>
+                    <td class="inventory-results-demand"></td>
+                    <td class="inventory-results-beginning"></td>
+                    <td class="inventory-results-receipts"></td>
+                    <td class="inventory-results-ending"></td>
+                    <td class="inventory-results-safety"></td>
+                  </tr>
+                  <tr class="inventory-results-row">
+                    <td class="inventory-results-month"></td>
+                    <td class="inventory-results-demand"></td>
+                    <td class="inventory-results-beginning"></td>
+                    <td class="inventory-results-receipts"></td>
+                    <td class="inventory-results-ending"></td>
+                    <td class="inventory-results-safety"></td>
+                  </tr>
+                </tbody>
+              </table>
+            </section>
+          </div>
         </div>
       </div>
     </main>
@@ -262,7 +573,14 @@
       const controlsForm = document.getElementById("inventory-controls");
       const calculateButton = document.getElementById("inventory-calculate");
       const graphResults = document.getElementById("inventory-results");
+      const annualDemandValue = document.getElementById("inventory-results-annual-demand");
+      const eoqValue = document.getElementById("inventory-results-eoq");
+      const safetyStockValue = document.getElementById("inventory-results-safety-stock");
+      const orderTimingValue = document.getElementById("inventory-results-order-timing");
+      const orderTimingList = document.getElementById("inventory-results-order-list");
       const modalElement = document.querySelector(".calc_modal");
+      const resultRows = graphResults ? Array.from(graphResults.querySelectorAll(".inventory-results-row")) : [];
+      const orderTimingRows = orderTimingList ? Array.from(orderTimingList.querySelectorAll(".results-order-row")) : [];
       let chartHandle;
       let hasAccess = false;
       let pendingCalculation = null;
@@ -302,6 +620,75 @@
         graphResults.hidden = !isVisible;
       }
 
+      function formatNumber(value) {
+        return value.toLocaleString("en-US");
+      }
+
+      function formatUnits(value) {
+        return formatNumber(value) + " units";
+      }
+
+      function formatMonthLabel(date) {
+        return date.toLocaleDateString("en-US", {
+          month: "short",
+          year: "numeric"
+        });
+      }
+
+      function renderResults(options, result) {
+        if (!result || !annualDemandValue || !eoqValue || !safetyStockValue || !orderTimingValue) {
+          return;
+        }
+
+        annualDemandValue.textContent = formatUnits(options.annualDemand);
+        eoqValue.textContent = formatUnits(result.eoq);
+        safetyStockValue.textContent = formatUnits(result.safetyStock);
+
+        const receiptMonths = result.months
+          .filter((month) => month.receipts > 0)
+          .map((month) => ({
+            month: formatMonthLabel(month.month),
+            action: "Order " + formatUnits(month.receipts)
+          }));
+
+        orderTimingValue.hidden = receiptMonths.length > 0;
+
+        if (orderTimingList) {
+          orderTimingList.hidden = receiptMonths.length === 0;
+        }
+
+        if (receiptMonths.length === 0) {
+          orderTimingValue.textContent = "No projected orders.";
+        }
+
+        orderTimingRows.forEach((row, index) => {
+          const receiptMonth = receiptMonths[index];
+          row.hidden = !receiptMonth;
+
+          if (!receiptMonth) {
+            return;
+          }
+
+          row.querySelector(".results-order-month").textContent = receiptMonth.month;
+          row.querySelector(".results-order-action").textContent = receiptMonth.action;
+        });
+
+        resultRows.forEach((row, index) => {
+          const month = result.months[index];
+
+          if (!month) {
+            return;
+          }
+
+          row.querySelector(".inventory-results-month").textContent = formatMonthLabel(month.month);
+          row.querySelector(".inventory-results-demand").textContent = formatUnits(month.fulfillment);
+          row.querySelector(".inventory-results-beginning").textContent = formatUnits(month.beginningInventory);
+          row.querySelector(".inventory-results-receipts").textContent = formatUnits(month.receipts);
+          row.querySelector(".inventory-results-ending").textContent = formatUnits(month.endingInventory);
+          row.querySelector(".inventory-results-safety").textContent = formatUnits(month.safetyStock);
+        });
+      }
+
       function mountChart(options) {
         if (chartHandle) {
           chartHandle.destroy();
@@ -309,6 +696,7 @@
 
         setResultsVisible(true);
         chartHandle = InventoryGraph.mount("#inventory-graph", options);
+        renderResults(options, chartHandle.result);
         return chartHandle;
       }
 

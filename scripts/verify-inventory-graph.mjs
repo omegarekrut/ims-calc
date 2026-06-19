@@ -58,6 +58,29 @@ const expectedDemoFields = [
   { name: 'averageLeadTime', value: '2', min: '0', step: '1' },
 ];
 
+const demoSeasonalityMonthsAfterFirst = [
+  0.0333333333333333,
+  0.0633333333333333,
+  0.0833333333333333,
+  0.0833333333333333,
+  0.0633333333333333,
+  0.0633333333333333,
+  0.1033333333333333,
+  0.1033333333333333,
+  0.1033333333333333,
+  0.15,
+  0.1333333333333333,
+];
+
+const demoFirstSeasonality =
+  1 -
+  demoSeasonalityMonthsAfterFirst.reduce(
+    (sum, monthSeasonality) => sum + monthSeasonality,
+    0,
+  );
+
+const demoSeasonality = [demoFirstSeasonality, ...demoSeasonalityMonthsAfterFirst];
+
 function ensureArtifactDirectory() {
   fs.mkdirSync(rawDir, { recursive: true });
 }
@@ -402,6 +425,41 @@ function verifyDemoHtml() {
     /document\.createElement\((?!['"]canvas['"]\))/,
     'demo.html must not dynamically create non-canvas UI elements.',
   );
+  assert.match(
+    demoHtml,
+    /<span[^>]*id="inventory-results-annual-demand"[^>]*>/,
+    'demo.html must contain a static annual demand summary placeholder.',
+  );
+  assert.match(
+    demoHtml,
+    /<span[^>]*id="inventory-results-eoq"[^>]*>/,
+    'demo.html must contain a static EOQ summary placeholder.',
+  );
+  assert.match(
+    demoHtml,
+    /<span[^>]*id="inventory-results-safety-stock"[^>]*>/,
+    'demo.html must contain a static safety stock summary placeholder.',
+  );
+  assert.match(
+    demoHtml,
+    /<p[^>]*id="inventory-results-order-timing"[^>]*>/,
+    'demo.html must contain a static order-timing empty-state placeholder.',
+  );
+  assert.match(
+    demoHtml,
+    /<div[^>]*id="inventory-results-order-list"[^>]*>/,
+    'demo.html must contain a static order-timing list container.',
+  );
+  assert.equal(
+    (demoHtml.match(/class="results-order-row"/g) ?? []).length,
+    12,
+    'demo.html must contain 12 static order-timing rows.',
+  );
+  assert.equal(
+    (demoHtml.match(/class="inventory-results-row"/g) ?? []).length,
+    12,
+    'demo.html must contain 12 static monthly result rows.',
+  );
   assert.doesNotMatch(
     demoHtml,
     /calc-demo-unlock|Demo Only:\s*Simulate Webflow Success|revealLatestSuccessElement/,
@@ -449,37 +507,86 @@ function addUtcMonths(isoString, monthOffset) {
   return date.toISOString();
 }
 
+function roundDemoInteger(value) {
+  if (value >= 0) {
+    return Math.floor(value + 0.5);
+  }
+
+  return Math.ceil(value - 0.5);
+}
+
 function createSerializedDemoMonths(startDate, options) {
-  const baseInventory = options.startingInventory;
-  const monthlyDemand = options.averageMonthlySales;
-  const replenishment = options.costPerOrder;
-  const safetyStock = options.maxMonthlySales + options.maxLeadTime;
+  const safetyStock =
+    options.maxMonthlySales * options.maxLeadTime -
+    options.averageMonthlySales * options.averageLeadTime;
+  const eoq = roundDemoInteger(
+    Math.sqrt((2 * options.annualDemand * options.costPerOrder) / options.holdingCostPerUnit),
+  );
+  const months = [];
 
-  return Array.from({ length: 12 }, (_, index) => {
-    const receipts = index === 0 ? replenishment : 0;
-    const beginningInventory = baseInventory + index * 10;
-    const endingInventory = beginningInventory + receipts - monthlyDemand;
+  demoSeasonality.forEach((seasonality, index) => {
+    const fulfillment = roundDemoInteger(options.annualDemand * seasonality);
+    const beginningInventory =
+      index === 0 ? options.startingInventory : months[index - 1].endingInventory;
+    const receipts = safetyStock > beginningInventory ? eoq : 0;
+    const endingInventory = beginningInventory + receipts - fulfillment;
 
-    return {
+    months.push({
       month: addUtcMonths(startDate, index),
-      fulfillment: monthlyDemand + index,
+      fulfillment,
       beginningInventory,
       receipts,
       endingInventory,
       safetyStock,
-    };
+    });
   });
+
+  return months;
 }
 
 function createDemoResult(options) {
+  const safetyStock =
+    options.maxMonthlySales * options.maxLeadTime -
+    options.averageMonthlySales * options.averageLeadTime;
+  const eoq = roundDemoInteger(
+    Math.sqrt((2 * options.annualDemand * options.costPerOrder) / options.holdingCostPerUnit),
+  );
+
   return {
-    eoq: options.annualDemand + options.costPerOrder,
-    safetyStock: options.maxMonthlySales + options.maxLeadTime,
+    eoq,
+    safetyStock,
     months: createSerializedDemoMonths(options.startDate.toISOString(), options).map((month) => ({
       ...month,
       month: new Date(month.month),
     })),
   };
+}
+
+function formatDemoNumber(value) {
+  return value.toLocaleString('en-US');
+}
+
+function formatDemoUnits(value) {
+  return `${formatDemoNumber(value)} units`;
+}
+
+function formatDemoMonthLabel(date) {
+  return date.toLocaleDateString('en-US', {
+    month: 'short',
+    year: 'numeric',
+    timeZone: 'UTC',
+  });
+}
+
+function formatDemoOrderTiming(result) {
+  const receiptMonths = result.months
+    .filter((month) => month.receipts > 0)
+    .map((month) => ({
+      month: formatDemoMonthLabel(month.month),
+      action: `Order ${formatDemoUnits(month.receipts)}`,
+    }));
+
+  return receiptMonths;
 }
 
 class FakeClassList {
@@ -520,6 +627,43 @@ class FakeClassList {
   contains(token) {
     return this.tokens.has(token);
   }
+}
+
+function createFakeTextElement(mutationObservers, options = {}) {
+  const element = new FakeElement(options, mutationObservers);
+  element.textContent = '';
+  return element;
+}
+
+function createResultsRow(mutationObservers) {
+  const row = new FakeElement({ classNames: ['inventory-results-row'] }, mutationObservers);
+  const month = createFakeTextElement(mutationObservers, { classNames: ['inventory-results-month'] });
+  const demand = createFakeTextElement(mutationObservers, { classNames: ['inventory-results-demand'] });
+  const beginning = createFakeTextElement(mutationObservers, { classNames: ['inventory-results-beginning'] });
+  const receipts = createFakeTextElement(mutationObservers, { classNames: ['inventory-results-receipts'] });
+  const ending = createFakeTextElement(mutationObservers, { classNames: ['inventory-results-ending'] });
+  const safety = createFakeTextElement(mutationObservers, { classNames: ['inventory-results-safety'] });
+
+  row.appendChild(month);
+  row.appendChild(demand);
+  row.appendChild(beginning);
+  row.appendChild(receipts);
+  row.appendChild(ending);
+  row.appendChild(safety);
+
+  return row;
+}
+
+function createOrderTimingRow(mutationObservers) {
+  const row = new FakeElement({ classNames: ['results-order-row'] }, mutationObservers);
+  const month = createFakeTextElement(mutationObservers, { classNames: ['results-order-month'] });
+  const action = createFakeTextElement(mutationObservers, { classNames: ['results-order-action'] });
+
+  row.hidden = true;
+  row.appendChild(month);
+  row.appendChild(action);
+
+  return row;
 }
 
 class FakeElement {
@@ -708,6 +852,19 @@ function createDemoHarness({ savedValue } = {}) {
   };
   const calculateButton = new FakeElement({ id: 'inventory-calculate' }, mutationObservers);
   const resultsFrame = new FakeElement({ id: 'inventory-results' }, mutationObservers);
+  const annualDemandValue = createFakeTextElement(mutationObservers, {
+    id: 'inventory-results-annual-demand',
+  });
+  const eoqValue = createFakeTextElement(mutationObservers, { id: 'inventory-results-eoq' });
+  const safetyStockValue = createFakeTextElement(mutationObservers, {
+    id: 'inventory-results-safety-stock',
+  });
+  const orderTimingValue = createFakeTextElement(mutationObservers, {
+    id: 'inventory-results-order-timing',
+  });
+  const orderTimingList = new FakeElement({ id: 'inventory-results-order-list' }, mutationObservers);
+  const resultsRows = Array.from({ length: 12 }, () => createResultsRow(mutationObservers));
+  const orderTimingRows = Array.from({ length: 12 }, () => createOrderTimingRow(mutationObservers));
   const modalElement = new FakeElement({ classNames: ['calc_modal'] }, mutationObservers);
   const modalCard = new FakeElement({ classNames: ['calc_modal-card'] }, mutationObservers);
   const unlockForm = new FakeFormElement({ id: 'calc-unlock-form' }, mutationObservers);
@@ -718,6 +875,13 @@ function createDemoHarness({ savedValue } = {}) {
   });
   const successElement = new FakeElement({ classNames: ['w-form-done'] }, mutationObservers);
   successElement.style.display = 'none';
+  resultsFrame.appendChild(annualDemandValue);
+  resultsFrame.appendChild(eoqValue);
+  resultsFrame.appendChild(safetyStockValue);
+  resultsFrame.appendChild(orderTimingValue);
+  orderTimingRows.forEach((row) => orderTimingList.appendChild(row));
+  resultsFrame.appendChild(orderTimingList);
+  resultsRows.forEach((row) => resultsFrame.appendChild(row));
   modalElement.appendChild(modalCard);
   modalCard.appendChild(unlockForm);
   unlockForm.appendChild(unlockEmailInput);
@@ -735,6 +899,26 @@ function createDemoHarness({ savedValue } = {}) {
 
       if (id === 'inventory-results') {
         return resultsFrame;
+      }
+
+      if (id === 'inventory-results-annual-demand') {
+        return annualDemandValue;
+      }
+
+      if (id === 'inventory-results-eoq') {
+        return eoqValue;
+      }
+
+      if (id === 'inventory-results-safety-stock') {
+        return safetyStockValue;
+      }
+
+      if (id === 'inventory-results-order-timing') {
+        return orderTimingValue;
+      }
+
+      if (id === 'inventory-results-order-list') {
+        return orderTimingList;
       }
 
       if (id === 'calc-unlock-form') {
@@ -833,6 +1017,13 @@ function createDemoHarness({ savedValue } = {}) {
     mountCalls,
     mutationObservers,
     resultsFrame,
+    annualDemandValue,
+    eoqValue,
+    safetyStockValue,
+    orderTimingValue,
+    orderTimingList,
+    orderTimingRows,
+    resultsRows,
     storage,
     unlockEmailInput,
     unlockForm,
@@ -918,6 +1109,63 @@ function verifyDemoFlow() {
     'block',
     'Visible Webflow success should reveal .w-form-done.',
   );
+  const unlockedResult = createDemoResult(lockedHarness.mountCalls[0].options);
+  assert.equal(
+    lockedHarness.annualDemandValue.textContent,
+    formatDemoUnits(7000),
+    'Unlocked results should show the Annual Demand input value.',
+  );
+  assert.equal(
+    lockedHarness.eoqValue.textContent,
+    formatDemoUnits(unlockedResult.eoq),
+    'Unlocked results should show the mount handle EOQ value.',
+  );
+  assert.equal(
+    lockedHarness.safetyStockValue.textContent,
+    formatDemoUnits(unlockedResult.safetyStock),
+    'Unlocked results should show the mount handle safety stock value.',
+  );
+  assert.equal(
+    lockedHarness.orderTimingValue.hidden,
+    true,
+    'Unlocked results should hide the empty-state copy when orders exist.',
+  );
+  assert.equal(
+    lockedHarness.orderTimingList.hidden,
+    false,
+    'Unlocked results should reveal the stacked order list when orders exist.',
+  );
+  const unlockedOrderTiming = formatDemoOrderTiming(unlockedResult);
+  assert.equal(
+    lockedHarness.orderTimingRows[0].querySelector('.results-order-month').textContent,
+    unlockedOrderTiming[0].month,
+    'Unlocked results should render the first order month in its own row.',
+  );
+  assert.equal(
+    lockedHarness.orderTimingRows[0].querySelector('.results-order-action').textContent,
+    unlockedOrderTiming[0].action,
+    'Unlocked results should render action wording per order row.',
+  );
+  assert.equal(
+    lockedHarness.orderTimingRows[4].hidden,
+    true,
+    'Unlocked results should hide unused static order rows.',
+  );
+  assert.equal(
+    lockedHarness.resultsRows[0].querySelector('.inventory-results-month').textContent,
+    formatDemoMonthLabel(unlockedResult.months[0].month),
+    'Unlocked results should render the first month label in the static table.',
+  );
+  assert.equal(
+    lockedHarness.resultsRows[0].querySelector('.inventory-results-demand').textContent,
+    formatDemoUnits(unlockedResult.months[0].fulfillment),
+    'Unlocked results should render projected monthly demand in the static table.',
+  );
+  assert.equal(
+    lockedHarness.resultsRows[0].querySelector('.inventory-results-receipts').textContent,
+    formatDemoUnits(unlockedResult.months[0].receipts),
+    'Unlocked results should render receipt quantities in the static table.',
+  );
 
   const firstMountOptions = normalizeDemoOptions(lockedHarness.mountCalls[0].options);
   assert.equal(
@@ -984,8 +1232,8 @@ function verifyDemoFlow() {
       averageLeadTime: 2,
     },
     results: {
-      eoq: 1275,
-      safetyStock: 95,
+      eoq: 9999,
+      safetyStock: 8888,
       months: createSerializedDemoMonths(restoredStartDate, {
         startingInventory: 900,
         annualDemand: 1200,
@@ -995,7 +1243,12 @@ function verifyDemoFlow() {
         maxLeadTime: 5,
         averageMonthlySales: 70,
         averageLeadTime: 2,
-      }),
+      }).map((month) => ({
+        ...month,
+        fulfillment: 7777,
+        receipts: 6666,
+        safetyStock: 5555,
+      })),
     },
   });
   const restoredHarness = createDemoHarness({ savedValue: restoredState });
@@ -1030,6 +1283,43 @@ function verifyDemoFlow() {
     },
     'Restored mount should reuse the saved startDate and inputs.',
   );
+  assert.equal(
+    restoredHarness.annualDemandValue.textContent,
+    formatDemoUnits(1200),
+    'Restored results should show the restored Annual Demand input value.',
+  );
+  const restoredResult = createDemoResult(restoredHarness.mountCalls[0].options);
+  assert.equal(
+    restoredHarness.eoqValue.textContent,
+    formatDemoUnits(restoredResult.eoq),
+    'Restored visible EOQ must come from the fresh mount handle, not serialized saved results.',
+  );
+  assert.equal(
+    restoredHarness.safetyStockValue.textContent,
+    formatDemoUnits(restoredResult.safetyStock),
+    'Restored visible safety stock must come from the fresh mount handle, not serialized saved results.',
+  );
+  assert.equal(
+    restoredHarness.orderTimingValue.hidden,
+    true,
+    'Restored results should keep the empty-state copy hidden when orders exist.',
+  );
+  const restoredOrderTiming = formatDemoOrderTiming(restoredResult);
+  assert.equal(
+    restoredHarness.orderTimingRows[0].querySelector('.results-order-month').textContent,
+    restoredOrderTiming[0].month,
+    'Restored visible order timing month must come from the fresh mount handle receipts.',
+  );
+  assert.equal(
+    restoredHarness.orderTimingRows[0].querySelector('.results-order-action').textContent,
+    restoredOrderTiming[0].action,
+    'Restored visible order timing action must come from the fresh mount handle receipts.',
+  );
+  assert.equal(
+    restoredHarness.resultsRows[0].querySelector('.inventory-results-demand').textContent,
+    formatDemoUnits(restoredResult.months[0].fulfillment),
+    'Restored visible monthly demand must come from the fresh mount handle result.',
+  );
 
   restoredHarness.controls.get('startingInventory').value = '1111';
   restoredHarness.controls.get('annualDemand').value = '2222';
@@ -1060,6 +1350,74 @@ function verifyDemoFlow() {
   );
   assert.equal(savedAfterRecalc.inputs.startingInventory, 1111, 'Recalculation should persist updated input values.');
   assert.equal(savedAfterRecalc.inputs.annualDemand, 2222, 'Recalculation should persist current Annual Demand.');
+  assert.equal(
+    restoredHarness.annualDemandValue.textContent,
+    formatDemoUnits(2222),
+    'Recalculation should update the visible Annual Demand summary.',
+  );
+  const recalculatedResult = createDemoResult(restoredHarness.mountCalls[1].options);
+  assert.equal(
+    restoredHarness.eoqValue.textContent,
+    formatDemoUnits(recalculatedResult.eoq),
+    'Recalculation should update the visible EOQ summary when Annual Demand changes.',
+  );
+  assert.equal(
+    restoredHarness.safetyStockValue.textContent,
+    formatDemoUnits(recalculatedResult.safetyStock),
+    'Recalculation should keep visible safety stock unchanged when safety-stock inputs are unchanged.',
+  );
+  assert.equal(
+    restoredHarness.resultsRows[0].querySelector('.inventory-results-demand').textContent,
+    formatDemoUnits(recalculatedResult.months[0].fulfillment),
+    'Recalculation should update visible projected monthly demand when Annual Demand changes.',
+  );
+
+  const noOrderHarness = createDemoHarness({
+    savedValue: JSON.stringify({
+      version: 1,
+      savedAt: '2026-06-17T00:00:00.000Z',
+      startDate: restoredStartDate,
+      inputs: {
+        startingInventory: 10000,
+        annualDemand: 1200,
+        costPerOrder: 75,
+        holdingCostPerUnit: 3,
+        maxMonthlySales: 90,
+        maxLeadTime: 5,
+        averageMonthlySales: 70,
+        averageLeadTime: 2,
+      },
+      results: {
+        eoq: 0,
+        safetyStock: 0,
+        months: createSerializedDemoMonths(restoredStartDate, {
+          startingInventory: 10000,
+          annualDemand: 1200,
+          costPerOrder: 75,
+          holdingCostPerUnit: 3,
+          maxMonthlySales: 90,
+          maxLeadTime: 5,
+          averageMonthlySales: 70,
+          averageLeadTime: 2,
+        }),
+      },
+    }),
+  });
+  assert.equal(
+    noOrderHarness.orderTimingValue.hidden,
+    false,
+    'No-order results should keep the simple empty-state copy visible.',
+  );
+  assert.equal(
+    noOrderHarness.orderTimingValue.textContent,
+    'No projected orders.',
+    'No-order results should keep the existing simple empty state.',
+  );
+  assert.equal(
+    noOrderHarness.orderTimingList.hidden,
+    true,
+    'No-order results should hide the stacked order list.',
+  );
 
   const malformedHarness = createDemoHarness({ savedValue: '{"version":' });
   assert.equal(
