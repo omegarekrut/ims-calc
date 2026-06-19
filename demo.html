@@ -165,6 +165,12 @@
         gap: 10px;
       }
 
+      .results-order-list[hidden],
+      .results-order-row[hidden],
+      .results-order-empty[hidden] {
+        display: none;
+      }
+
       .results-order-row {
         display: grid;
         grid-template-columns: minmax(0, auto) minmax(0, 1fr);
@@ -579,6 +585,7 @@
       const orderTimingValue = document.getElementById("inventory-results-order-timing");
       const orderTimingList = document.getElementById("inventory-results-order-list");
       const modalElement = document.querySelector(".calc_modal");
+      const unlockForm = document.getElementById("calc-unlock-form");
       const resultRows = graphResults ? Array.from(graphResults.querySelectorAll(".inventory-results-row")) : [];
       const orderTimingRows = orderTimingList ? Array.from(orderTimingList.querySelectorAll(".results-order-row")) : [];
       let chartHandle;
@@ -898,6 +905,18 @@
         });
       }
 
+      function handleUnlockSubmit(event) {
+        const successElement = modalElement ? modalElement.querySelector(".w-form-done") : null;
+
+        if (!successElement) {
+          return;
+        }
+
+        event.preventDefault();
+        successElement.style.display = "block";
+        unlockPendingCalculation();
+      }
+
       function calculateAndPersist(options) {
         const startDate = new Date();
         const handle = mountChart({
@@ -948,6 +967,7 @@
       }
 
       calculateButton.addEventListener("click", handleCalculateClick);
+      unlockForm.addEventListener("submit", handleUnlockSubmit);
       initializeDemo();
     </script>
   </body>

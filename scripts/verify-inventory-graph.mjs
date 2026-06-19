@@ -450,6 +450,11 @@ function verifyDemoHtml() {
     /<div[^>]*id="inventory-results-order-list"[^>]*>/,
     'demo.html must contain a static order-timing list container.',
   );
+  assert.match(
+    demoHtml,
+    /\.results-order-row\[hidden\][\s\S]*?display:\s*none;/,
+    'demo.html must explicitly hide unused static order-timing rows.',
+  );
   assert.equal(
     (demoHtml.match(/class="results-order-row"/g) ?? []).length,
     12,
@@ -1072,27 +1077,27 @@ function verifyDemoFlow() {
 
   lockedHarness.controls.get('annualDemand').value = '8100';
   lockedHarness.controls.get('averageMonthlySales').value = '321';
+  let didPreventDefault = false;
   lockedHarness.unlockForm.dispatch('submit', {
-    preventDefault() {},
+    preventDefault() {
+      didPreventDefault = true;
+    },
   });
 
   assert.equal(
-    lockedHarness.mountCalls.length,
-    0,
-    'Submitting the Webflow form alone must not unlock before .w-form-done becomes visible.',
+    didPreventDefault,
+    true,
+    'Local demo unlock submit should prevent native form navigation.',
   );
   assert.equal(
     lockedHarness.successElement.style.display,
-    'none',
-    'Submitting the Webflow form alone must not reveal .w-form-done.',
+    'block',
+    'Local demo unlock submit should reveal the existing .w-form-done block.',
   );
-
-  lockedHarness.successElement.style.display = 'block';
-
   assert.equal(
     lockedHarness.mountCalls.length,
     1,
-    'Making the existing .w-form-done visible should unlock the graph.',
+    'Local demo unlock submit should unlock after revealing .w-form-done.',
   );
   assert.equal(
     lockedHarness.resultsFrame.hidden,
